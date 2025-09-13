@@ -4,6 +4,7 @@ import time
 import sys
 import threading
 import concurrent.futures
+import argparse
 from urllib.parse import urljoin, urlparse
 from curl_cffi import requests
 from bs4 import BeautifulSoup
@@ -16,8 +17,6 @@ PERMALINKS_FILE = "permalinks.txt"
 DOWNLOADED_LOG_FILE = "downloaded_permalinks.txt"
 # The main directory where all downloaded posts and media will be stored.
 POSTS_DIR = "posts"
-# The base URL of the blog, used for cleaning up filenames.
-BLOG_BASE_URL = "https://prawfsblawg.blogs.com/prawfsblawg/"
 # Number of concurrent download threads.
 MAX_WORKERS = 8
 # The browser profile to impersonate to avoid being blocked.
@@ -82,18 +81,19 @@ def log_url_as_downloaded(url, lock):
         with open(DOWNLOADED_LOG_FILE, 'a') as f:
             f.write(url + '\n')
 
-def generate_filename_from_url(url):
+def generate_filename_from_url(url, blog_base_url):
     """
     Creates a clean base filename from a post URL.
     Example: 'https://.../blawg/2025/08/foo.html' -> '2025_08_foo.html'
     Args:
         url (str): The full URL of the blog post.
+        blog_base_url (str): The base URL of the blog.
     Returns:
         A string representing the clean base filename.
     """
-    if url.startswith(BLOG_BASE_URL):
+    if url.startswith(blog_base_url):
         # Remove the base part of the URL.
-        short_path = url[len(BLOG_BASE_URL):]
+        short_path = url[len(blog_base_url):]
         # Replace slashes with underscores.
         return short_path.replace('/', '_')
     return os.path.basename(urlparse(url).path) # Fallback for unexpected URL formats
@@ -122,16 +122,17 @@ def download_file(session, url, save_path):
         tqdm.write(f"ERROR: An exception occurred while downloading {url}: {e}")
         return False
 
-def process_url(url, session, lock):
+def process_url(url, blog_base_url, session, lock):
     """
     The core logic for processing a single URL. This function is executed by each thread.
     Args:
         url (str): The post URL to process.
+        blog_base_url (str): The base URL of the blog.
         session: The shared requests session object.
         lock (threading.Lock): The lock for writing to the log file.
     """
     # 1. Generate the filename and paths for this post.
-    base_filename = generate_filename_from_url(url)
+    base_filename = generate_filename_from_url(url, blog_base_url)
     html_filename = os.path.splitext(base_filename)[0] + ".html"
     html_save_path = os.path.join(POSTS_DIR, html_filename)
 
@@ -184,6 +185,22 @@ def main():
     """
     The main function to set up and run the concurrent downloader.
     """
+    parser = argparse.ArgumentParser(description="Download all posts and their media from a Typepad-style blog.")
+    parser.add_argument("blog_url", help="The root URL of the blog (e.g., 'https://growabrain.typepad.com/growabrain/')")
+    args = parser.parse_args()
+
+    # --- Derive URL from the input ---
+    parsed_url = urlparse(args.blog_url)
+    if not parsed_url.scheme or not parsed_url.netloc:
+        logging.error("Invalid URL provided. Please include the scheme (e.g., 'https://').")
+        return
+
+    path_parts = [part for part in parsed_url.path.split('/') if part]
+    blog_name = path_parts[0] if path_parts else parsed_url.netloc.split('.')[0]
+    
+    BLOG_BASE_URL = f"{parsed_url.scheme}://{parsed_url.netloc}/{blog_name}/"
+    logging.info(f"Using Blog Base URL: {BLOG_BASE_URL}")
+
     setup_environment()
     all_post_urls = get_post_urls()
     downloaded_urls = get_already_downloaded_urls()
@@ -205,7 +222,7 @@ def main():
         # Use ThreadPoolExecutor to manage a pool of threads
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
             # Create a dictionary of futures
-            future_to_url = {executor.submit(process_url, url, session, file_lock): url for url in urls_to_process}
+            future_to_url = {executor.submit(process_url, url, BLOG_BASE_URL, session, file_lock): url for url in urls_to_process}
             
             # Use tqdm to create a progress bar as futures complete
             for future in tqdm(concurrent.futures.as_completed(future_to_url), total=len(urls_to_process), desc="Downloading Posts"):
