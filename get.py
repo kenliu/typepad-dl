@@ -6,6 +6,7 @@ import argparse
 from urllib.parse import urlparse
 from curl_cffi import requests
 from bs4 import BeautifulSoup
+from tqdm import tqdm
 
 # --- Configuration ---
 # The range of pages you want to scrape.
@@ -22,8 +23,8 @@ RETRY_DELAY = 30
 IMPERSONATE_BROWSER = "chrome110"
 
 # --- Setup Logging ---
-# Configures basic logging to print progress and error messages to the console.
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Configures basic logging. Using a simple format to avoid clutter with the progress bar.
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 def setup_environment():
     """
@@ -48,7 +49,8 @@ def get_already_scanned_pages():
                 try:
                     scanned_pages.add(int(line.strip()))
                 except ValueError:
-                    logging.warning(f"Could not parse line in {SCANNED_FILE}: {line.strip()}")
+                    # Use tqdm.write to avoid interfering with a progress bar if this runs mid-script
+                    tqdm.write(f"WARNING: Could not parse line in {SCANNED_FILE}: {line.strip()}")
     return scanned_pages
 
 def save_permalinks(links):
@@ -127,7 +129,7 @@ def check_for_next_page(html_content, current_page_num):
     # Use a regular expression to find the page number in the URL.
     match = re.search(r'/page/(\d+)/?$', next_href)
     if not match:
-        logging.warning(f"Found 'Next' link with an unexpected URL format: {next_href}")
+        tqdm.write(f"WARNING: Found 'Next' link with an unexpected URL format: {next_href}")
         return False
         
     try:
@@ -137,12 +139,12 @@ def check_for_next_page(html_content, current_page_num):
         if next_page_num == expected_next_page:
             return True
         else:
-            logging.warning(
-                f"Sanity check failed: Current page is {current_page_num}, but 'Next' link points to page {next_page_num}."
+            tqdm.write(
+                f"WARNING: Sanity check failed: Current page is {current_page_num}, but 'Next' link points to page {next_page_num}."
             )
             return False
     except (ValueError, IndexError):
-        logging.warning(f"Could not parse page number from 'Next' link URL: {next_href}")
+        tqdm.write(f"WARNING: Could not parse page number from 'Next' link URL: {next_href}")
         return False
 
 def main():
@@ -174,76 +176,76 @@ def main():
 
     session = requests.Session()
     page_num = START_PAGE
+    total_permalinks_found = 0
 
-    while True:
-        if page_num in scanned_pages:
-            logging.info(f"Page {page_num} already scanned. Skipping.")
-            page_num += 1
-            continue
+    with tqdm(unit=" page") as pbar:
+        while True:
+            pbar.set_description(f"Scanning Page {page_num}")
 
-        url = BASE_URL.format(page_num)
-        logging.info(f"Scanning page {page_num}: {url}")
+            if page_num in scanned_pages:
+                page_num += 1
+                continue
 
-        retries = 0
-        max_retries = 5
-        response_content = None
+            url = BASE_URL.format(page_num)
+            retries = 0
+            max_retries = 5
+            response_content = None
 
-        while retries < max_retries:
-            try:
-                response = session.get(url, impersonate=IMPERSONATE_BROWSER, timeout=20)
+            while retries < max_retries:
+                try:
+                    response = session.get(url, impersonate=IMPERSONATE_BROWSER, timeout=20)
 
-                if response.status_code == 200:
-                    response_content = response.text
-                    break
-                elif response.status_code == 404:
-                    logging.info(f"Page {page_num} not found (404). Assuming this is the end of the blog.")
-                    response_content = "STOP"
-                    break
-                elif 500 <= response.status_code < 600:
-                    logging.warning(f"Received server error (status {response.status_code}) for page {page_num}. Retrying in {RETRY_DELAY} seconds...")
+                    if response.status_code == 200:
+                        response_content = response.text
+                        break
+                    elif response.status_code == 404:
+                        tqdm.write(f"Page {page_num} not found (404). Assuming this is the end of the blog.")
+                        response_content = "STOP"
+                        break
+                    elif 500 <= response.status_code < 600:
+                        tqdm.write(f"WARNING: Server error (status {response.status_code}) for page {page_num}. Retrying in {RETRY_DELAY}s...")
+                        time.sleep(RETRY_DELAY)
+                        retries += 1
+                    else:
+                        tqdm.write(f"ERROR: Unexpected status code {response.status_code} for page {page_num}. Skipping.")
+                        response_content = "SKIP"
+                        break
+
+                except Exception as e:
+                    tqdm.write(f"ERROR: Exception on page {page_num}: {e}. Retrying in {RETRY_DELAY}s...")
                     time.sleep(RETRY_DELAY)
                     retries += 1
-                else:
-                    logging.error(f"Received unexpected status code {response.status_code} for page {page_num}. Skipping page.")
-                    response_content = "SKIP"
-                    break
 
-            except Exception as e:
-                logging.error(f"An exception occurred while fetching page {page_num}: {e}. Retrying in {RETRY_DELAY} seconds...")
-                time.sleep(RETRY_DELAY)
-                retries += 1
+            if response_content == "STOP":
+                break
+            if response_content == "SKIP" or response_content is None:
+                if response_content is None:
+                    tqdm.write(f"ERROR: Failed to fetch page {page_num} after {max_retries} retries. Skipping.")
+                page_num += 1
+                continue
 
-        if response_content == "STOP":
-            break
-        if response_content == "SKIP" or response_content is None:
-            if response_content is None:
-                logging.error(f"Failed to fetch page {page_num} after {max_retries} retries. Moving to the next page.")
+            # --- Process successful fetch ---
+            pbar.update(1)
+            file_path = os.path.join(DATA_DIR, f'page_{page_num}.html')
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write(response_content)
+
+            permalinks = extract_permalinks(response_content, PERMALINK_PREFIX)
+            if permalinks:
+                save_permalinks(permalinks)
+                total_permalinks_found += len(permalinks)
+            
+            pbar.set_postfix(found=f"{total_permalinks_found} permalinks")
+            mark_page_as_scanned(page_num)
+            
+            if not check_for_next_page(response_content, page_num):
+                tqdm.write(f"No valid 'Next' link found on page {page_num}. Concluding scrape.")
+                break
+
             page_num += 1
-            continue
+            time.sleep(0.5) # A small polite delay between pages
 
-        # --- Process successful fetch ---
-        file_path = os.path.join(DATA_DIR, f'page_{page_num}.html')
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(response_content)
-
-        permalinks = extract_permalinks(response_content, PERMALINK_PREFIX)
-        if permalinks:
-            save_permalinks(permalinks)
-            logging.info(f"Found and saved {len(permalinks)} unique permalinks from page {page_num}")
-        else:
-            logging.info(f"No permalinks found on page {page_num}")
-
-        mark_page_as_scanned(page_num)
-        
-        # Check if there's a next page to continue the loop
-        if not check_for_next_page(response_content, page_num):
-            logging.info(f"No valid 'Next' link found on page {page_num}. Concluding scrape.")
-            break
-
-        page_num += 1
-
-    logging.info("Scraping process complete.")
+    logging.info(f"Scraping process complete. Found a total of {total_permalinks_found} permalinks.")
 
 if __name__ == "__main__":
     main()
-
