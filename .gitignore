@@ -1,3 +1,4 @@
 *.txt
 raw-paged-data/*
 posts/*
+*.sh
