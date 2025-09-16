@@ -121,7 +121,7 @@ def download_file(session, url, save_path):
     except Exception as e:
         tqdm.write(f"ERROR: An exception occurred while downloading {url}: {e}")
         return False
-
+    
 def process_url(url, blog_base_url, session, lock):
     """
     The core logic for processing a single URL. This function is executed by each thread.
@@ -151,26 +151,36 @@ def process_url(url, blog_base_url, session, lock):
     with open(html_save_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
-    # 4. Parse the HTML to find and download media.
+    # 4. Parse the HTML to find and download all media (images and linked files).
     soup = BeautifulSoup(html_content, 'html.parser')
     content_div = soup.find('div', class_='content')
 
     if content_div:
-        media_links = []
+        # Use a set to automatically handle duplicate URLs
+        media_urls = set()
+
+        # Find all images directly from <img> tags
+        for img in content_div.find_all('img', src=True):
+            src = img['src']
+            if '.typepad.com/' in src: # Only grab images hosted on typepad
+                media_urls.add(urljoin(url, src))
+
+        # Find all linked media from <a> tags
         for link in content_div.find_all('a', href=True):
             href = link['href']
             path = urlparse(href).path
             is_media_link = any(path.lower().endswith(ext) for ext in MEDIA_EXTENSIONS)
+            
             if '.typepad.com/' in href and is_media_link:
-                media_links.append(urljoin(url, href))
+                media_urls.add(urljoin(url, href))
 
-        if media_links:
+        if media_urls:
             media_dir_name = os.path.splitext(base_filename)[0]
             media_dir_path = os.path.join(POSTS_DIR, media_dir_name)
             if not os.path.exists(media_dir_path):
                 os.makedirs(media_dir_path)
 
-            for media_url in media_links:
+            for media_url in media_urls:
                 media_filename = os.path.basename(urlparse(media_url).path)
                 media_save_path = os.path.join(media_dir_path, media_filename)
                 if not os.path.exists(media_save_path):
@@ -179,7 +189,6 @@ def process_url(url, blog_base_url, session, lock):
     
     # 5. Log this URL as successfully processed.
     log_url_as_downloaded(url, lock)
-
 
 def main():
     """
