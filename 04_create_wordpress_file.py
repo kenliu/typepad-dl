@@ -37,11 +37,20 @@ def parse_date(date_str):
         return None
     
     # --- Aggressive Cleanup Logic ---
+    # First, get rid of extra text like "| Permalink" or "in [Category]"
     clean_str = date_str.split('|')[0]
     clean_str = clean_str.split(' in ')[0]
+    # Next, find the date part, which usually comes after " on "
     if ' on ' in clean_str:
         clean_str = clean_str.rsplit(' on ', 1)[-1]
-    clean_str = clean_str.replace("at ", "").strip()
+    
+    # Normalize whitespace. This fixes issues with non-breaking spaces (\xa0)
+    # and multiple spaces between date parts, making the string predictable.
+    clean_str = clean_str.replace('\xa0', ' ')
+    clean_str = re.sub(r'\s+', ' ', clean_str).strip()
+    
+    # Now that whitespace is clean, remove the "at " before the time.
+    clean_str = clean_str.replace("at ", "")
     
     formats_to_try = [
         "%B %d, %Y %I:%M %p",    # July 09, 2022 10:55 PM
@@ -361,4 +370,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
