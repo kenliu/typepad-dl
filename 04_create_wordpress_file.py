@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import math
+import re
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from tqdm import tqdm
@@ -17,8 +18,9 @@ SOURCE_EXPORT_DIR = "wordpress_export"
 MAP_FILE = os.path.join(SOURCE_EXPORT_DIR, "file_map.json")
 # The name of the final WordPress import file.
 OUTPUT_WXR_FILE = os.path.join(SOURCE_EXPORT_DIR, "import.xml")
-# The path where media will be located in WordPress.
-WP_MEDIA_PATH = "/wp-content/uploads/typepad_media/"
+# The relative path where media will be located in WordPress.
+# Using ../ makes it relative to the post's URL (e.g., /my-post/).
+WP_MEDIA_PATH = "../wp-content/uploads/typepad_media/"
 # Default author name if one cannot be found in the HTML.
 DEFAULT_AUTHOR = "admin"
 
@@ -35,22 +37,12 @@ def parse_date(date_str):
         return None
     
     # --- Aggressive Cleanup Logic ---
-    # 1. Take only the part before the first '|' to remove "Permalink", "Comments", etc.
     clean_str = date_str.split('|')[0]
-    
-    # 2. A common format is "... DATE in CATEGORY". Split by " in " to remove the category.
     clean_str = clean_str.split(' in ')[0]
-
-    # 3. Another common format is "Posted by AUTHOR on DATE". We can find the last
-    #    instance of " on " and take everything that follows it.
     if ' on ' in clean_str:
-        # rsplit from the right once to correctly handle names like "Ron"
         clean_str = clean_str.rsplit(' on ', 1)[-1]
-    
-    # 4. Finally, remove the "at " that often precedes the time.
     clean_str = clean_str.replace("at ", "").strip()
     
-    # A list of possible date formats to try.
     formats_to_try = [
         "%B %d, %Y %I:%M %p",    # July 09, 2022 10:55 PM
         "%B %d, %Y",            # October 14, 2015
@@ -58,70 +50,118 @@ def parse_date(date_str):
     ]
     for fmt in formats_to_try:
         try:
-            # The final clean_str should now be just the date/time part.
             return datetime.strptime(clean_str.strip(), fmt)
         except ValueError:
             continue
-            
-    # Return None if no format matches after all cleanup attempts.
     return None
 
-def rewrite_links(soup_content, file_map, original_post_url, scrub_popups=True):
+def find_file_in_map(original_url, local_file_slug, file_map):
     """
-    Rewrites all media links in the post content to point to their new,
-    local WordPress paths. Also scrubs Typepad's popup image links.
+    Finds a file in the map using a more flexible matching logic
+    that ignores file extensions.
     """
-    # --- Scrub Typepad's image popup links, leaving just the image ---
-    if scrub_popups:
-        # Find all links that point to Typepad's image popup viewer
-        for a_tag in soup_content.find_all('a', href=True):
-            if '.shared/image.html' in a_tag['href']:
-                # Check if the link contains an image
-                if a_tag.find('img'):
-                    # This "unwraps" the image, removing the <a> tag
-                    # but keeping the <img> tag inside it.
-                    a_tag.unwrap()
-
-    # Rewrite image links
-    for img_tag in soup_content.find_all('img'):
-        if not img_tag.get('src'):
-            continue
-        
-        original_src = img_tag['src']
-        # Construct the key to look for in the file_map.
-        # This involves getting the filename from the URL and combining it with the post's folder.
-        post_slug = os.path.splitext(os.path.basename(urlparse(original_post_url).path))[0]
-        original_filename = os.path.basename(urlparse(original_src).path)
-        
-        # The key in our map is the original local file path.
-        map_key = os.path.join(SOURCE_POSTS_DIR, post_slug, original_filename)
-        
-        if map_key in file_map:
-            new_filename = file_map[map_key]
-            img_tag['src'] = os.path.join(WP_MEDIA_PATH, new_filename)
-        else:
-            # Fallback for links that might not be in a post-specific folder
-            # (e.g., shared images). We just try to find the filename.
-            for key, value in file_map.items():
-                if key.endswith(original_filename):
-                    img_tag['src'] = os.path.join(WP_MEDIA_PATH, value)
-                    break
+    original_filename_no_ext = os.path.splitext(os.path.basename(urlparse(original_url).path))[0]
     
-    # Rewrite links to other media files (like PDFs)
-    for a_tag in soup_content.find_all('a'):
-        if not a_tag.get('href'):
-            continue
-        
-        original_href = a_tag['href']
-        # We only want to rewrite links to files, not to other web pages.
-        if any(original_href.lower().endswith(ext) for ext in ['.pdf', '.zip', '.doc', '.docx', '.mp3']):
-            post_slug = os.path.splitext(os.path.basename(urlparse(original_href).path))[0]
-            original_filename = os.path.basename(urlparse(original_href).path)
-            map_key = os.path.join(SOURCE_POSTS_DIR, post_slug, original_filename)
+    # Construct the ideal path stem we are looking for
+    path_stem_to_find = os.path.join(SOURCE_POSTS_DIR, local_file_slug, original_filename_no_ext)
+    
+    # First, try to find a key in the map that matches this stem
+    for key in file_map:
+        key_stem = os.path.splitext(key)[0]
+        if key_stem == path_stem_to_find:
+            return file_map[key]
             
-            if map_key in file_map:
-                new_filename = file_map[map_key]
-                a_tag['href'] = os.path.join(WP_MEDIA_PATH, new_filename)
+    # As a fallback, if not found, just check for the filename itself
+    # This helps with shared images not in a post-specific folder
+    for key in file_map:
+        key_filename_no_ext = os.path.splitext(os.path.basename(key))[0]
+        if key_filename_no_ext == original_filename_no_ext:
+            return file_map[key]
+
+    return None # Return None if no match is found
+
+def process_content(soup_content, file_map, local_file_slug, blog_url, scrub_popups=True, remove_divs=True, remove_brs=True):
+    """
+    Cleans and rewrites the post content by processing all links and tags
+    in a structured order.
+    """
+    # --- Step 1: Remove "Editor's Note" paragraphs ---
+    editor_note_phrases = ["Back in March", "none of the images will work", "a lot of links are now broken"]
+    for p_tag in soup_content.find_all('p'):
+        p_text = p_tag.get_text()
+        if all(phrase in p_text for phrase in editor_note_phrases):
+            p_tag.decompose()
+
+    # --- Step 2: Unwrap images from bare <td> tags ---
+    for td_tag in soup_content.find_all('td'):
+        if td_tag.parent.name != 'tr':
+            td_tag.unwrap()
+            
+    # --- Step 3: Remove all div tags if enabled ---
+    if remove_divs:
+        for div_tag in soup_content.find_all('div'):
+            div_tag.unwrap()
+            
+    # --- New Step 4: Remove <br> tags if enabled ---
+    if remove_brs:
+        for br_tag in soup_content.find_all('br'):
+            br_tag.replace_with(' ') # Replace with a single space
+
+    # --- Step 5: Process all links (<a> tags) in one go ---
+    for a_tag in soup_content.find_all('a', href=True):
+        if not a_tag.parent:
+            continue
+
+        original_href = a_tag.get('href', '')
+        # Rule 1: Scrub JavaScript Popups
+        if scrub_popups:
+            onclick = a_tag.get('onclick', '')
+            is_known_popup_url = '.shared/image.html' in original_href or original_href.endswith('-popup')
+            is_generic_js_popup = 'typepad.com' in original_href and 'window.open' in onclick
+            if is_known_popup_url or is_generic_js_popup:
+                if a_tag.find('img'):
+                    a_tag.unwrap()
+                elif not a_tag.get_text(strip=True):
+                    a_tag.decompose()
+                continue
+        
+        # Rule 2: Rewrite internal links between blog posts
+        if blog_url and original_href.startswith(blog_url):
+            is_media = any(original_href.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.zip', '.doc', '.docx', '.mp3'])
+            if not is_media:
+                 path = urlparse(original_href).path
+                 slug = os.path.splitext(os.path.basename(path))[0]
+                 if slug:
+                     a_tag['href'] = f"/{slug}/"
+                     continue
+        
+        # Rule 3: Rewrite links to media files (including images wrapped in links)
+        new_filename = find_file_in_map(original_href, local_file_slug, file_map)
+        if new_filename:
+            # If the link just wraps an image, unwrap it.
+            if a_tag.find('img'):
+                a_tag.unwrap()
+            # Otherwise, it's a link to a file (like a PDF), so rewrite the href.
+            else:
+                a_tag['href'] = f"{WP_MEDIA_PATH}{new_filename}"
+
+    # --- Step 6: Rewrite and clean all standalone <img> tags ---
+    for img_tag in soup_content.find_all('img', src=True):
+        new_filename = find_file_in_map(img_tag['src'], local_file_slug, file_map)
+        if new_filename:
+            img_tag['src'] = f"{WP_MEDIA_PATH}{new_filename}"
+        
+        # Convert inline float styles to WordPress alignment classes
+        if img_tag.has_attr('style'):
+            style = img_tag['style'].lower()
+            new_classes = img_tag.get('class', [])
+            if 'float: right' in style:
+                new_classes.append('alignright')
+            elif 'float: left' in style:
+                new_classes.append('alignleft')
+            if new_classes:
+                img_tag['class'] = ' '.join(new_classes)
+                del img_tag['style']
 
     return soup_content
 
@@ -134,8 +174,17 @@ def main():
     parser.add_argument("--blog_title", help="The title of your blog (e.g., 'My Awesome Blog').", default="Archived Typepad Blog")
     parser.add_argument("--blog_url", help="The original root URL of the blog (e.g., 'https://myblog.typepad.com/blog/').", default="http://example.com/blog")
     parser.add_argument("--disable-popup-scrubbing", action="store_true", help="Disables the removal of Typepad's image popup links.")
+    parser.add_argument("--disable-div-rm", action="store_true", help="Disables the removal of all div tags from post content.")
+    parser.add_argument("--disable-br-rm", action="store_true", help="Disables removing <br> tags and cleaning up whitespace.")
     parser.add_argument("--max-posts-per-file", type=int, default=0, help="Split the output into multiple files with this many posts per file. Default is 0 (all in one file).")
     args = parser.parse_args()
+    
+    # --- Add a warning if the blog URL is not provided ---
+    blog_url_provided = args.blog_url != "http://example.com/blog"
+    if not blog_url_provided:
+        logging.warning("No --blog_url provided. Internal links to other posts will not be rewritten.")
+        # Set to None so the script doesn't try to match against the default value.
+        args.blog_url = None
 
     # --- 1. Load the File Map ---
     logging.info("Starting WXR creation script.")
@@ -156,7 +205,6 @@ def main():
     logging.info(f"Found {len(html_files)} HTML post files to process.")
 
     # --- 3. Start Building the WXR File ---
-    # This is the standard header for a WordPress WXR file.
     wxr_header = f"""<?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0"
     xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
@@ -167,7 +215,7 @@ def main():
 >
 <channel>
     <title>{args.blog_title}</title>
-    <link>{args.blog_url}</link>
+    <link>{args.blog_url or 'http://example.com'}</link>
     <description>An archive of a Typepad blog.</description>
     <pubDate>{datetime.now().strftime('%a, %d %b %Y %H:%M:%S +0000')}</pubDate>
     <language>en-US</language>
@@ -188,57 +236,60 @@ def main():
         # --- Extract Post Details ---
         title = soup.find('h3', class_='entry-header') or soup.find('h3')
         title_text = title.get_text(strip=True) if title else "Untitled Post"
-
-        # Find the original URL of the post from the canonical link or permalink
+        local_file_slug = os.path.splitext(os.path.basename(html_file))[0]
         canonical_link = soup.find('link', rel='canonical')
         original_post_url = canonical_link['href'] if canonical_link else (soup.find('a', class_='permalink')['href'] if soup.find('a', class_='permalink') else None)
         if not original_post_url:
-            post_slug = os.path.splitext(os.path.basename(html_file))[0]
-            original_post_url = urljoin(args.blog_url, post_slug + ".html")
-
+            original_post_url = urljoin(args.blog_url, local_file_slug + ".html")
         post_name = urlparse(original_post_url).path.strip('/').split('/')[-1].replace('.html', '')
 
         # --- Find and parse the date with fallbacks ---
         publish_date = None
         date_text = ""
-        
-        # 1. Try to parse from the HTML content first (most accurate).
         date_tag = soup.find('p', class_='entry-footer-info') or soup.find('p', class_='posted') or soup.find('h2', class_='date-header')
         if date_tag:
             date_text = date_tag.get_text(strip=True)
             publish_date = parse_date(date_text)
-        
-        # 2. If parsing failed, fall back to the filename.
         if not publish_date:
             try:
-                filename_parts = os.path.basename(html_file).split('_')
+                filename_parts = local_file_slug.split('_')
                 if len(filename_parts) >= 2 and filename_parts[0].isdigit() and filename_parts[1].isdigit():
                     year = int(filename_parts[0])
                     month = int(filename_parts[1])
-                    publish_date = datetime(year, month, 1) # Default to the 1st of the month
-                    if date_text: # Only show warning if there was text we failed to parse
+                    publish_date = datetime(year, month, 1)
+                    if date_text:
                         tqdm.write(f"WARNING: Could not parse date '{date_text}' in {os.path.basename(html_file)}. Using filename: {publish_date.strftime('%Y-%m')}")
             except (ValueError, IndexError):
-                pass # Silently fail if filename format is unexpected.
-
-        # 3. As a last resort, if both methods fail, use the current time.
+                pass
         if not publish_date:
             tqdm.write(f"WARNING: Could not determine date for {os.path.basename(html_file)}. Using current time.")
             publish_date = datetime.now()
         
-        # Find the author
         author_tag = soup.find('div', class_=lambda c: c and c.startswith('entry-author-'))
         author_name = author_tag['class'][0].replace('entry-author-', '') if author_tag else DEFAULT_AUTHOR
 
         # --- Extract and Clean Content ---
         content_div = soup.find('div', class_='entry-body') or soup.find('div', class_='entry-content')
         if not content_div:
-            logging.warning(f"Could not find content body for {html_file}. Skipping.")
-            continue
+            content_div = soup.find('article') or soup.find('body')
+            if not content_div:
+                logging.warning(f"Could not find any content body for {html_file}. Skipping.")
+                continue
             
-        # Pass the scrubbing flag to the rewrite function
-        content_soup = rewrite_links(content_div, file_map, original_post_url, scrub_popups=not args.disable_popup_scrubbing)
-        content_html = str(content_soup)
+        content_soup = process_content(
+            content_div, 
+            file_map, 
+            local_file_slug,
+            args.blog_url,
+            scrub_popups=not args.disable_popup_scrubbing,
+            remove_divs=not args.disable_div_rm,
+            remove_brs=not args.disable_br_rm
+        )
+        content_html = "".join(str(c) for c in content_soup.contents)
+        
+        # New: Final whitespace cleanup, also conditional
+        if not args.disable_br_rm:
+            content_html = re.sub(r'\s+', ' ', content_html).strip()
 
         # --- Assemble the WXR <item> for this post ---
         item = f"""
@@ -274,7 +325,6 @@ def main():
 """
     
     if args.max_posts_per_file <= 0:
-        # Write everything to a single file
         with open(OUTPUT_WXR_FILE, 'w', encoding='utf-8') as f:
             f.write(wxr_header)
             for item in all_wxr_items:
@@ -282,13 +332,11 @@ def main():
             f.write(wxr_footer)
         logging.info(f"Successfully created single WordPress import file: {OUTPUT_WXR_FILE}")
     else:
-        # Split the items into chunks and write multiple files
         chunk_size = args.max_posts_per_file
         num_chunks = math.ceil(len(all_wxr_items) / chunk_size)
         
         for i in range(num_chunks):
             output_filename = os.path.join(SOURCE_EXPORT_DIR, f"import-part-{i+1}.xml")
-            
             start_index = i * chunk_size
             end_index = start_index + chunk_size
             chunk_items = all_wxr_items[start_index:end_index]
@@ -302,6 +350,14 @@ def main():
         logging.info(f"Successfully created {num_chunks} WordPress import files in '{SOURCE_EXPORT_DIR}'.")
 
     logging.info("Process complete.")
+    
+    # --- Final instructions for the user ---
+    print("\n--- Next Steps ---")
+    print("1. Upload the 'typepad_media' folder to your WordPress site's 'wp-content/uploads/' directory.")
+    print("2. Go to your WordPress admin dashboard, navigate to Tools -> Import, and run the WordPress importer with your new .xml file(s).")
+    if blog_url_provided:
+        print("3. IMPORTANT: For internal links to work, go to Settings -> Permalinks and set the structure to 'Post name'.")
+    print("------------------")
 
 if __name__ == "__main__":
     main()
