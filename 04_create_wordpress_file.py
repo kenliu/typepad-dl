@@ -29,40 +29,50 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 def parse_date(date_str):
     """
-    Parses various date string formats found in Typepad blogs and returns
-    a datetime object. This function is designed to be robust against extra
-    text often found in the date line.
+    Parses date strings by extracting known date/time patterns using regular
+    expressions, ignoring any surrounding junk text. This is more robust
+    than trying to clean the string.
     """
     if not date_str:
         return None
-    
-    # --- Aggressive Cleanup Logic ---
-    # First, get rid of extra text like "| Permalink" or "in [Category]"
-    clean_str = date_str.split('|')[0]
-    clean_str = clean_str.split(' in ')[0]
-    # Next, find the date part, which usually comes after " on "
-    if ' on ' in clean_str:
-        clean_str = clean_str.rsplit(' on ', 1)[-1]
-    
-    # Normalize whitespace. This fixes issues with non-breaking spaces (\xa0)
-    # and multiple spaces between date parts, making the string predictable.
-    clean_str = clean_str.replace('\xa0', ' ')
-    clean_str = re.sub(r'\s+', ' ', clean_str).strip()
-    
-    # Now that whitespace is clean, remove the "at " before the time.
-    clean_str = clean_str.replace("at ", "")
-    
-    formats_to_try = [
-        "%B %d, %Y %I:%M %p",    # July 09, 2022 10:55 PM
-        "%B %d, %Y",            # October 14, 2015
-        "%b %d, %Y %I:%M:%S %p", # Oct 21, 2015 12:17:25 AM
+
+    # First, handle non-breaking spaces, which can interfere with regex
+    clean_str = date_str.replace('\xa0', ' ')
+
+    # List of (regex_pattern, strptime_format) tuples.
+    # We order them from most specific (date and time) to least specific (date only).
+    patterns_to_try = [
+        # Format: April 12, 2005 at 12:52 PM
+        (r'[a-zA-Z]+\s+\d{1,2},\s+\d{4}\s+at\s+\d{1,2}:\d{2}\s+[AP]M', "%B %d, %Y at %I:%M %p"),
+        # Format: Oct 21, 2015 12:17:25 AM
+        (r'[a-zA-Z]+\s+\d{1,2},\s+\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+[AP]M', "%b %d, %Y %I:%M:%S %p"),
+        # Format: October 14, 2015
+        (r'[a-zA-Z]+\s+\d{1,2},\s+\d{4}', "%B %d, %Y"),
     ]
-    for fmt in formats_to_try:
-        try:
-            return datetime.strptime(clean_str.strip(), fmt)
-        except ValueError:
-            continue
-    return None
+
+    for pattern, fmt in patterns_to_try:
+        match = re.search(pattern, clean_str, re.IGNORECASE)
+        if match:
+            date_substring = match.group(0)
+            try:
+                # strptime is case-sensitive for AM/PM, so we must normalize it to uppercase.
+                # Using re.sub with a function to uppercase the found group (am/pm).
+                date_substring = re.sub(r'([ap])m$', lambda m: m.group(1).upper() + 'M', date_substring, flags=re.IGNORECASE)
+
+                # Attempt to parse the extracted date string
+                return datetime.strptime(date_substring, fmt)
+            except ValueError:
+                # This can happen if month is abbreviated ("Oct") but format expects full ("%B").
+                # We'll try swapping the month format specifier as a fallback.
+                try:
+                    if '%B' in fmt:
+                        return datetime.strptime(date_substring, fmt.replace('%B', '%b'))
+                    elif '%b' in fmt:
+                        return datetime.strptime(date_substring, fmt.replace('%b', '%B'))
+                except ValueError:
+                    continue # This pattern failed, try the next one
+    return None # If no patterns matched, return None
+
 
 def find_file_in_map(original_url, local_file_slug, file_map):
     """
@@ -70,16 +80,16 @@ def find_file_in_map(original_url, local_file_slug, file_map):
     that ignores file extensions.
     """
     original_filename_no_ext = os.path.splitext(os.path.basename(urlparse(original_url).path))[0]
-    
+
     # Construct the ideal path stem we are looking for
     path_stem_to_find = os.path.join(SOURCE_POSTS_DIR, local_file_slug, original_filename_no_ext)
-    
+
     # First, try to find a key in the map that matches this stem
     for key in file_map:
         key_stem = os.path.splitext(key)[0]
         if key_stem == path_stem_to_find:
             return file_map[key]
-            
+
     # As a fallback, if not found, just check for the filename itself
     # This helps with shared images not in a post-specific folder
     for key in file_map:
@@ -105,12 +115,12 @@ def process_content(soup_content, file_map, local_file_slug, blog_url, scrub_pop
     for td_tag in soup_content.find_all('td'):
         if td_tag.parent.name != 'tr':
             td_tag.unwrap()
-            
+
     # --- Step 3: Remove all div tags if enabled ---
     if remove_divs:
         for div_tag in soup_content.find_all('div'):
             div_tag.unwrap()
-            
+
     # --- New Step 4: Remove <br> tags if enabled ---
     if remove_brs:
         for br_tag in soup_content.find_all('br'):
@@ -133,7 +143,7 @@ def process_content(soup_content, file_map, local_file_slug, blog_url, scrub_pop
                 elif not a_tag.get_text(strip=True):
                     a_tag.decompose()
                 continue
-        
+
         # Rule 2: Rewrite internal links between blog posts
         if blog_url and original_href.startswith(blog_url):
             is_media = any(original_href.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.zip', '.doc', '.docx', '.mp3'])
@@ -143,7 +153,7 @@ def process_content(soup_content, file_map, local_file_slug, blog_url, scrub_pop
                  if slug:
                      a_tag['href'] = f"/{slug}/"
                      continue
-        
+
         # Rule 3: Rewrite links to media files (including images wrapped in links)
         new_filename = find_file_in_map(original_href, local_file_slug, file_map)
         if new_filename:
@@ -159,7 +169,7 @@ def process_content(soup_content, file_map, local_file_slug, blog_url, scrub_pop
         new_filename = find_file_in_map(img_tag['src'], local_file_slug, file_map)
         if new_filename:
             img_tag['src'] = f"{WP_MEDIA_PATH}{new_filename}"
-        
+
         # Convert inline float styles to WordPress alignment classes
         if img_tag.has_attr('style'):
             style = img_tag['style'].lower()
@@ -187,7 +197,7 @@ def main():
     parser.add_argument("--disable-br-rm", action="store_true", help="Disables removing <br> tags and cleaning up whitespace.")
     parser.add_argument("--max-posts-per-file", type=int, default=0, help="Split the output into multiple files with this many posts per file. Default is 0 (all in one file).")
     args = parser.parse_args()
-    
+
     # --- Add a warning if the blog URL is not provided ---
     blog_url_provided = args.blog_url != "http://example.com/blog"
     if not blog_url_provided:
@@ -210,7 +220,7 @@ def main():
     if not html_files:
         logging.error(f"No HTML files found in '{SOURCE_POSTS_DIR}'.")
         return
-        
+
     logging.info(f"Found {len(html_files)} HTML post files to process.")
 
     # --- 3. Start Building the WXR File ---
@@ -230,9 +240,9 @@ def main():
     <language>en-US</language>
     <wp:wxr_version>1.2</wp:wxr_version>
 """
-    
+
     all_wxr_items = []
-    
+
     # --- 4. Process Each HTML File and Collect All Items ---
     for html_file in tqdm(html_files, desc="Converting Posts"):
         with open(html_file, 'r', encoding='utf-8') as f:
@@ -249,7 +259,7 @@ def main():
         canonical_link = soup.find('link', rel='canonical')
         original_post_url = canonical_link['href'] if canonical_link else (soup.find('a', class_='permalink')['href'] if soup.find('a', class_='permalink') else None)
         if not original_post_url:
-            original_post_url = urljoin(args.blog_url, local_file_slug + ".html")
+            original_post_url = urljoin(args.blog_url or "", local_file_slug + ".html")
         post_name = urlparse(original_post_url).path.strip('/').split('/')[-1].replace('.html', '')
 
         # --- Find and parse the date with fallbacks ---
@@ -257,7 +267,7 @@ def main():
         date_text = ""
         date_tag = soup.find('p', class_='entry-footer-info') or soup.find('p', class_='posted') or soup.find('h2', class_='date-header')
         if date_tag:
-            # Use .strings to correctly get text pieces around HTML tags
+            # Use .strings to correctly get text pieces around HTML tags, providing a clean string
             date_text = "".join(date_tag.strings)
             publish_date = parse_date(date_text)
         if not publish_date:
@@ -274,7 +284,7 @@ def main():
         if not publish_date:
             tqdm.write(f"WARNING: Could not determine date for {os.path.basename(html_file)}. Using current time.")
             publish_date = datetime.now()
-        
+
         author_tag = soup.find('div', class_=lambda c: c and c.startswith('entry-author-'))
         author_name = author_tag['class'][0].replace('entry-author-', '') if author_tag else DEFAULT_AUTHOR
 
@@ -285,10 +295,10 @@ def main():
             if not content_div:
                 logging.warning(f"Could not find any content body for {html_file}. Skipping.")
                 continue
-            
+
         content_soup = process_content(
-            content_div, 
-            file_map, 
+            content_div,
+            file_map,
             local_file_slug,
             args.blog_url,
             scrub_popups=not args.disable_popup_scrubbing,
@@ -296,7 +306,7 @@ def main():
             remove_brs=not args.disable_br_rm
         )
         content_html = "".join(str(c) for c in content_soup.contents)
-        
+
         # New: Final whitespace cleanup, also conditional
         if not args.disable_br_rm:
             content_html = re.sub(r'\s+', ' ', content_html).strip()
@@ -327,13 +337,13 @@ def main():
     </item>
 """
         all_wxr_items.append(item)
-        
+
     # --- 5. Finalize and Save the WXR File(s) ---
     wxr_footer = """
 </channel>
 </rss>
 """
-    
+
     if args.max_posts_per_file <= 0:
         with open(OUTPUT_WXR_FILE, 'w', encoding='utf-8') as f:
             f.write(wxr_header)
@@ -344,23 +354,23 @@ def main():
     else:
         chunk_size = args.max_posts_per_file
         num_chunks = math.ceil(len(all_wxr_items) / chunk_size)
-        
+
         for i in range(num_chunks):
             output_filename = os.path.join(SOURCE_EXPORT_DIR, f"import-part-{i+1}.xml")
             start_index = i * chunk_size
             end_index = start_index + chunk_size
             chunk_items = all_wxr_items[start_index:end_index]
-            
+
             with open(output_filename, 'w', encoding='utf-8') as f:
                 f.write(wxr_header)
                 for item in chunk_items:
                     f.write(item)
                 f.write(wxr_footer)
-        
+
         logging.info(f"Successfully created {num_chunks} WordPress import files in '{SOURCE_EXPORT_DIR}'.")
 
     logging.info("Process complete.")
-    
+
     # --- Final instructions for the user ---
     print("\n--- Next Steps ---")
     print("1. Upload the 'typepad_media' folder to your WordPress site's 'wp-content/uploads/' directory.")
