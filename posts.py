@@ -19,6 +19,9 @@ DOWNLOADED_LOG_FILE = "downloaded_permalinks.txt"
 POSTS_DIR = "posts"
 # Number of concurrent download threads.
 MAX_WORKERS = 8
+# Retry logic for fetching posts
+MAX_RETRIES = 3
+RETRY_DELAY = 5 # seconds
 # The browser profile to impersonate to avoid being blocked.
 IMPERSONATE_BROWSER = "chrome110"
 # A list of common media file extensions to look for.
@@ -121,7 +124,7 @@ def download_file(session, url, save_path):
     except Exception as e:
         tqdm.write(f"ERROR: An exception occurred while downloading {url}: {e}")
         return False
-    
+
 def process_url(url, blog_base_url, session, lock):
     """
     The core logic for processing a single URL. This function is executed by each thread.
@@ -136,15 +139,29 @@ def process_url(url, blog_base_url, session, lock):
     html_filename = os.path.splitext(base_filename)[0] + ".html"
     html_save_path = os.path.join(POSTS_DIR, html_filename)
 
-    # 2. Download the post's HTML content.
-    try:
-        response = session.get(url, impersonate=IMPERSONATE_BROWSER, timeout=20)
-        if response.status_code != 200:
-            tqdm.write(f"ERROR: Failed to fetch post HTML for {url}. Status: {response.status_code}")
-            return
-        html_content = response.text
-    except Exception as e:
-        tqdm.write(f"ERROR: An exception occurred fetching post HTML for {url}: {e}")
+    # 2. Download the post's HTML content with a retry loop.
+    html_content = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = session.get(url, impersonate=IMPERSONATE_BROWSER, timeout=20)
+            if response.status_code == 200:
+                html_content = response.text
+                break  # Success, exit the retry loop
+            elif response.status_code == 404:
+                tqdm.write(f"WARNING: Post not found (404) at {url}. Skipping.")
+                return # Permanent error, no need to retry or process further
+            else:
+                tqdm.write(f"WARNING: Got status {response.status_code} for {url} on attempt {attempt + 1}. Retrying...")
+        except Exception as e:
+            tqdm.write(f"WARNING: Exception for {url} on attempt {attempt + 1}: {e}. Retrying...")
+        
+        # Don't sleep on the last attempt
+        if attempt < MAX_RETRIES - 1:
+            time.sleep(RETRY_DELAY)
+
+    # If all retries failed, html_content will still be None
+    if html_content is None:
+        tqdm.write(f"ERROR: Failed to fetch post HTML for {url} after {MAX_RETRIES} attempts. Skipping post.")
         return
 
     # 3. Save the HTML file.
@@ -189,6 +206,7 @@ def process_url(url, blog_base_url, session, lock):
     
     # 5. Log this URL as successfully processed.
     log_url_as_downloaded(url, lock)
+
 
 def main():
     """
