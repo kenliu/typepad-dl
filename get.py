@@ -97,7 +97,9 @@ def extract_permalinks(html_content, permalink_prefix):
 def check_for_next_page(html_content, current_page_num):
     """
     Parses the HTML to find a valid 'Next' page link.
-    A valid link must exist and point to the next sequential page.
+    A valid link is identified by being in the 'pager-right' section and
+    containing either the text 'Next' or the '»' character. It must also
+    point to the next sequential page.
     Args:
         html_content (str): The raw HTML of the current page.
         current_page_num (int): The number of the page just scraped.
@@ -106,15 +108,15 @@ def check_for_next_page(html_content, current_page_num):
     """
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Find the 'Next' link using a CSS selector for precision.
+    # Find the link on the right side of the pager.
     next_link = soup.select_one('div.pager-inner span.pager-right a')
     
     if not next_link:
         return False
         
-    # Check if the visible text inside the link is 'Next'.
-    pager_label = next_link.select_one('span.pager-label')
-    if not pager_label or pager_label.get_text(strip=True).lower() != 'next':
+    # Check for indicators of a "Next" link, like the text 'Next' or the '»' symbol.
+    link_text = next_link.get_text(strip=True).lower()
+    if 'next' not in link_text and '»' not in link_text:
         return False
 
     # Extract the URL and perform the sanity check.
