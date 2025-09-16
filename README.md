@@ -1,23 +1,24 @@
-# Typepad Blog Archiver 📥
+# Typepad Blog Archiver & WordPress Importer 📥
 
-This is a simple, two-step tool to download a full archive of a Typepad blog. It's built to save your content before Typepad shuts down.
+This is a simple, four-step tool to download a full archive of a Typepad blog and prepare it for import into WordPress. It's built to save your content and help you move to a new home on the web.
 
-First, it finds every post on your blog. Then, it downloads each post as an HTML file and grabs all linked media (like images, CSS, and PDFs).
+First, it finds every post on your blog. Then, it downloads each post and all its media. Finally, it organizes everything into a standard WordPress import file.
 
 -----
 
 ## Features
 
   * **Complete Archiving**: Downloads all posts, associated media files, and site assets (CSS, JS).
-  * **Resume Support**: If the script stops, you can run it again and it will pick up where it left off.
-  * **Simple Structure**: Saves each post as a clean HTML file. Media for each post goes into a matching folder, and shared assets go into a common `assets` directory.
+  * **WordPress Export**: Creates a WordPress-compatible `.xml` file for easy importing.
+  * **Smart Media Handling**: De-duplicates images and gives all files clean, web-safe names.
+  * **Resume Support**: If a script stops, you can run it again and it will pick up where it left off.
   * **Fast Downloads**: Uses multiple threads to download posts and files quickly.
 
 -----
 
 ## How to Use
 
-Follow these two steps to archive your blog.
+Follow these four steps to archive your blog and prepare it for WordPress.
 
 ### Step 1: Get All Post Links
 
@@ -28,7 +29,7 @@ This step uses `01_get.py` to crawl your blog and create a list of every post's 
     ```bash
     python 01_get.py "https://blawg.typepad.com/blawg/"
     ```
-3.  **Wait for it to finish.** The script will go through every page of your blog (`/page/1/`, `/page/2/`, etc.) and find all the "Permalink" links.
+3.  **Wait for it to finish.** The script will go through every page of your blog and find all the "Permalink" links.
 
 This creates a file named `**permalinks.txt**` that contains the URL for every post on your blog.
 
@@ -44,9 +45,39 @@ This step uses `02_posts.py` to read the list of URLs and download everything.
     ```bash
     python 02_posts.py "https://blawg.typepad.com/blawg/" --debug
     ```
-2.  **A progress bar will appear.** The script will now download the HTML for every post and any media files or assets (CSS, JS, images) it finds inside that post.
+2.  **A progress bar will appear.** The script will now download the HTML for every post and any media files (images, PDFs, etc.) it finds inside that post.
 
 When it's done, you will have a `posts` folder with your full blog archive.
+
+### Step 3: Prepare Media for WordPress
+
+This step uses `03_prepare_media.py` to get all your downloaded files ready for WordPress.
+
+1.  **Run the script** from your terminal. It doesn't need any arguments.
+    ```bash
+    python 03_prepare_media.py
+    ```
+2.  **The script will find all your media** (images, documents, etc.) from the `posts` folder. It gets rid of duplicates, gives them clean names, and copies them into a new folder called `wordpress_export/typepad_media`.
+
+### Step 4: Create the WordPress Import File
+
+This is the final step to create the `.xml` file for WordPress.
+
+1.  **Run the script** with your blog's original URL and a title.
+    ```bash
+    python 04_create_wordpress_file.py --blog_url "https://blawg.typepad.com/blawg/" --blog_title "My Awesome Blog"
+    ```
+2.  **This script reads every post,** cleans up the HTML, and updates all the image links to work on your new WordPress site. It then creates a single `import.xml` file in the `wordpress_export` folder.
+
+### Step 5: Import to WordPress\! 🎉
+
+You're ready to move your content into WordPress.
+
+1.  Using an FTP client or your web host's file manager, **upload the `typepad_media` folder** into your WordPress site's `wp-content/uploads/` directory.
+2.  Log in to your WordPress admin dashboard. Go to **Tools -\> Import**.
+3.  Find "WordPress" at the bottom and click **"Install Now"** if you haven't already, then **"Run Importer"**.
+4.  Upload the `import.xml` file you created in Step 4.
+5.  Follow the on-screen instructions. When you're done, go to **Settings -\> Permalinks** and choose the **"Post name"** option. This is important for your old links to work\!
 
 -----
 
@@ -57,14 +88,10 @@ You need Python 3 installed on your computer. You also need to install a few Pyt
 Run this command in your terminal to install them:
 
 ```bash
-pip install curl_cffi beautifulsoup4 tqdm
+pip3 install curl_cffi beautifulsoup4 tqdm Pillow imagehash python-magic-bin
 ```
 
------
-
-Of course\! That's a great question, as it's a common stumbling block.
-
-You can add the following section to the `README.md` file, probably right after the "Requirements" section.
+**Note for Windows users:** The `python-magic-bin` package is recommended because it includes files needed to run on Windows without extra setup.
 
 -----
 
@@ -127,7 +154,7 @@ Here are solutions to some common issues you might run into.
 
 This usually happens if you run the script from the wrong folder. You need to tell your terminal to navigate to the correct directory first.
 
-  * **The Fix:** Use the `cd` (change directory) command to move into the folder where you saved the `01_get.py` and `02_posts.py` files.
+  * **The Fix:** Use the `cd` (change directory) command to move into the folder where you saved the `.py` files.
     ```bash
     # Example: If your files are in a folder called "archive" on your Desktop
     cd Desktop/archive
@@ -145,70 +172,68 @@ On many systems, especially macOS and Linux, you need to be more specific.
     pip3 install curl_cffi beautifulsoup4 tqdm
     ```
 
-### `01_get.py` only finds a few posts and then stops.
+### My image links are broken in WordPress.
 
-This can happen if your blog theme is very old or broken and is missing a "Next" page link for the script to follow. While the script has been improved to handle this better, some themes might still fail.
+This can happen for two common reasons.
 
-  * **The Fix (Manual Workaround):** You can create the `permalinks.txt` file yourself.
-    1.  Log into Typepad and use their built-in export tool. It will give you a single large `.txt` file.
-    2.  Open that file in a text editor and search for all the URLs to your posts. They usually contain a keyword like `PERMALINK`.
-    3.  Copy and paste all of those post URLs into a new file named `permalinks.txt`. Make sure there is only one URL per line.
-    4.  Save the file. Now you can skip `01_get.py` and run `02_posts.py` directly.
+1.  **You didn't set the `--blog_url` flag.** When you run `04_create_wordpress_file.py`, you must provide your original blog URL. This helps the script know which links are internal and need to be rewritten.
+2.  **You forgot to set your Permalinks.** In your WordPress dashboard, go to **Settings -\> Permalinks** and select **"Post name"**.
 
-### The scripts are not downloading my images.
+### The WordPress import is failing or timing out\!
 
-This was a bug in an earlier version. If you are having this problem, please make sure you have the latest version of the `02_posts.py` script. The new version is much better at finding and downloading all linked media, including images inside links.
+If you have a very large blog with thousands of posts, the single `import.xml` file might be too big for your web host to handle. This can cause the import process to crash, time out, or fail without a clear error.
+
+  * **The Fix:** You can split the export into multiple smaller files. The script has a built-in option for this. When you run step 4, add the `--max-posts-per-file` flag.
+    ```bash
+    python 04_create_wordpress_file.py --blog_url "..." --blog_title "..." --max-posts-per-file 100
+    ```
+    This will create several files (e.g., `import-part-1.xml`, `import-part-2.xml`, etc.), each containing a maximum of 100 posts. You can then upload these smaller files to the WordPress importer one at a time until your whole blog is imported. If it still fails, try a smaller number like `50`.
 
 -----
 
 ## How It Works
 
-The tool is split into two parts to be safe and reliable.
+The tool is split into four parts to be safe and reliable.
 
-1.  `01_get.py`: This script acts like a search engine. It navigates your blog's "Next" page links over and over. On each page, it looks for links with the text "Permalink", which are the direct URLs to your posts.
+1.  `01_get.py`: This script acts like a search engine. It navigates your blog's "Next" page links and finds the direct URL for every single post. It saves these in `permalinks.txt`.
 
-      * It saves these URLs in `**permalinks.txt**`.
-      * It saves the raw HTML of each index page in the `**raw-paged-data/**` folder.
-      * It keeps track of which pages it has already processed in `**scanned.txt**` so it can resume if stopped.
+2.  `02_posts.py`: This script is the downloader. It reads each URL from `permalinks.txt` and downloads the post's HTML page, its media (images, PDFs), and any shared site assets (CSS, JS).
 
-2.  `02_posts.py`: This script is the downloader. It reads each URL from `permalinks.txt` and does the following:
+3.  `03_prepare_media.py`: This script is the organizer. It scans all the downloaded media, finds and removes duplicate images, gives every file a clean and safe name, and moves them to a single `typepad_media` folder. It creates a `file_map.json` to remember the old filename for each new one.
 
-      * Downloads the post's main HTML page.
-      * Scans the HTML for shared assets like CSS, JavaScript, and icons, downloads them, and saves them to a central `**posts/assets/**` folder. It rewrites the HTML to point to these local files.
-      * Creates a folder named after the post slug (e.g., `my-first-post/`).
-      * Scans the post content for links to files (like `.jpg`, `.pdf`, `.zip`).
-      * Downloads all those files into the folder it created.
-      * Keeps track of finished posts in `**downloaded_permalinks.txt**` so it can resume if stopped.
+4.  `04_create_wordpress_file.py`: This is the builder. It reads each HTML post and the `file_map.json`. It cleans up the post content, fixes all the media links to point to their new location, and bundles everything into a single `import.xml` file that WordPress can read.
 
 -----
 
 ## Final File Structure
 
-After running both scripts, your folder will look like this:
+After running all the scripts, your folder will look like this:
 
 ```
 .
 ├── 01_get.py
 ├── 02_posts.py
+├── 03_prepare_media.py
+├── 04_create_wordpress_file.py
 ├── permalinks.txt            # <-- List of all your post URLs
 ├── downloaded_permalinks.txt   # <-- Log of downloaded posts
 ├── scanned.txt               # <-- Log of scanned blog pages
 |
 ├── raw-paged-data/           # <-- Raw HTML of each blog index page
 │   ├── page_1.html
-│   └── page_2.html
-│
-└── posts/                    # <-- YOUR FINAL ARCHIVE
-    ├── assets/               # <-- Shared site assets
-    │   ├── main_stylesheet.css
-    │   ├── site_script.js
-    │   └── favicon.ico
-    │
-    ├── 2025_08_my-first-post.html
-    ├── 2025_08_my-first-post/
-    │   ├── picture_of_dog.jpg
-    │   └── important_document.pdf
-    │
-    ├── 2025_09_another-post.html
-    └── ...and so on
+│   └── ...
+|
+├── posts/                    # <-- YOUR RAW ARCHIVE
+│   ├── assets/
+│   ├── 2025_08_my-first-post.html
+│   ├── 2025_08_my-first-post/
+│   │   └── picture_of_dog.jpg
+│   └── ...
+|
+└── wordpress_export/         # <-- YOUR WORDPRESS IMPORT FILES
+    ├── file_map.json         # <-- Map of old to new media files
+    ├── import.xml            # <-- The file you upload to WordPress
+    └── typepad_media/        # <-- All your media, ready to upload
+        ├── 2025_08_my-first-post_picture_of_dog.jpg
+        └── ...
 ```
