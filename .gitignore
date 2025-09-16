@@ -2,3 +2,6 @@
 raw-paged-data/*
 posts/*
 *.sh
+wordpress_export/*
+*.zip
+
