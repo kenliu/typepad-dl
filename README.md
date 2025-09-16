@@ -62,6 +62,63 @@ pip install curl_cffi beautifulsoup4 tqdm
 
 -----
 
+Of course\! That's a great question, as it's a common stumbling block.
+
+You can add the following section to the `README.md` file, probably right after the "Requirements" section.
+
+-----
+
+## What if the `pip` command fails? 🛠️
+
+Sometimes, even if you have Python, the `pip` command isn't installed or your system can't find it. If you get an error like "command not found", here is how to install it.
+
+### For Windows 🖥️
+
+Modern Python installers for Windows should include `pip` automatically. The easiest fix is often to repair your Python installation.
+
+1.  Find the original Python installer you downloaded. If you don't have it, download it again from the official Python website.
+2.  Run the installer. Choose the **"Modify"** or **"Repair"** option.
+3.  Make sure the checkbox for **"pip"** is selected.
+4.  On the next step, make sure the checkbox for **"Add Python to environment variables"** or **"Add Python to PATH"** is selected. This is very important\!
+5.  Finish the installation.
+
+Alternatively, you can try to install it from the command prompt:
+
+```bash
+python -m ensurepip --upgrade
+```
+
+### For macOS 🍎
+
+Python 3 on macOS should also come with `pip`. If it's missing, you can install it with this command in your terminal:
+
+```bash
+python3 -m ensurepip --upgrade
+```
+
+### For Linux (Ubuntu/Debian) 🐧
+
+You can use the system's package manager, `apt`, to install `pip`. This is the most reliable method.
+
+1.  First, update your package list:
+    ```bash
+    sudo apt update
+    ```
+2.  Then, install the package for `pip`:
+    ```bash
+    sudo apt install python3-pip
+    ```
+
+### Check if it Worked
+
+After trying one of the steps above, close and reopen your terminal. Then, run this command to see if it was successful:
+
+```bash
+pip3 --version
+```
+
+If it shows you a version number, you're all set\!
+
 ## Troubleshooting & FAQ 🤔
 
 Here are solutions to some common issues you might run into.
