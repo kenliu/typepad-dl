@@ -257,7 +257,8 @@ def main():
         date_text = ""
         date_tag = soup.find('p', class_='entry-footer-info') or soup.find('p', class_='posted') or soup.find('h2', class_='date-header')
         if date_tag:
-            date_text = date_tag.get_text(strip=True)
+            # Use .strings to correctly get text pieces around HTML tags
+            date_text = "".join(date_tag.strings)
             publish_date = parse_date(date_text)
         if not publish_date:
             try:
@@ -267,7 +268,7 @@ def main():
                     month = int(filename_parts[1])
                     publish_date = datetime(year, month, 1)
                     if date_text:
-                        tqdm.write(f"WARNING: Could not parse date '{date_text}' in {os.path.basename(html_file)}. Using filename: {publish_date.strftime('%Y-%m')}")
+                        tqdm.write(f"WARNING: Could not parse date '{date_text.strip()}' in {os.path.basename(html_file)}. Using filename: {publish_date.strftime('%Y-%m')}")
             except (ValueError, IndexError):
                 pass
         if not publish_date:
