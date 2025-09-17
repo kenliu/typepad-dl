@@ -1,0 +1,8 @@
+ImageHash
+Pillow
+beautifulsoup4
+curl_cffi
+lxml
+python_magic
+tqdm
+trafilatura

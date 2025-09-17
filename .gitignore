@@ -5,3 +5,4 @@ posts/*
 wordpress_export/*
 *.zip
 
+!requirements.txt
