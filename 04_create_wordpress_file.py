@@ -6,11 +6,13 @@ import re
 import sys
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
+from lxml.html import tostring
 from tqdm import tqdm
 from datetime import datetime
 import argparse
 import concurrent.futures
 from itertools import repeat
+import trafilatura
 
 # --- Configuration ---
 # The directory where your downloaded Typepad posts are stored.
@@ -186,14 +188,85 @@ def process_single_file(html_file, stem_map, basename_map, args):
     """
     try:
         with open(html_file, 'r', encoding='utf-8') as f:
-            soup = BeautifulSoup(f.read(), 'html.parser')
+            html_doc = f.read()
 
-        # --- Extract Post Details ---
-        title = soup.find('h3', class_='entry-header') or soup.find('h3')
+        # We need the full, original soup for finding the raw content block.
+        full_soup = BeautifulSoup(html_doc, 'html.parser')
+        
+        # --- Extract and Clean Content ---
+        content_div = None
+
+        # Primary method: Use Trafilatura to find the content, then extract the raw HTML block.
+        if not args.disable_intelligent_text_extract:
+            # 1. Use trafilatura to get the plain text content. This is our "map".
+            target_text = trafilatura.extract(
+                html_doc,
+                include_comments=False,
+                include_tables=True
+            )
+
+            # 2. If we found text, find it in the original soup to get the raw HTML.
+            if target_text and len(target_text) > 100: # Only search for reasonably long text
+                # We'll use a clean, whitespace-normalized snippet for searching.
+                search_snippet = ' '.join(target_text[:150].split())
+                
+                try:
+                    # 3. Find the text node in the original document.
+                    text_node = full_soup.find(string=re.compile(re.escape(search_snippet), re.IGNORECASE))
+                    
+                    if text_node:
+                        best_candidate = None
+                        min_length_diff = float('inf')
+                        
+                        # 4. Walk up the tree from the text to find the best parent container.
+                        # The "best" container is the one that has our text but not too much extra stuff.
+                        for parent in text_node.parents:
+                            parent_text_len = len(parent.get_text())
+                            length_diff = parent_text_len - len(target_text)
+                            
+                            if length_diff >= 0 and length_diff < min_length_diff:
+                                min_length_diff = length_diff
+                                best_candidate = parent
+                        
+                        # Use a copy of the found element to avoid modifying the original soup
+                        content_div = BeautifulSoup(str(best_candidate), 'html.parser')
+
+                except Exception:
+                    pass # If the search fails, we'll just fall through to the manual methods.
+
+
+        # Fallback method: Use manual rules if the new method fails or is disabled.
+        if not content_div:
+            # Special logic for blogs where content starts at the first h3 in a div.content
+            if args.content_start_h3:
+                content_container = full_soup.find('div', class_='content')
+                if content_container:
+                    start_node = content_container.find('h3')
+                    if start_node:
+                        content_div = full_soup.new_tag('div')
+                        content_div.append(start_node)
+                        for sibling in start_node.find_next_siblings():
+                            # Stop if we hit the Trackbacks or Comments sections
+                            if sibling.name == 'h2' and sibling.find('a', id={'trackback', 'comments'}):
+                                break
+                            content_div.append(sibling)
+            
+            # If the new logic didn't run or didn't find content, fall back to the original method
+            if not content_div:
+                content_div = full_soup.find('div', class_='entry-body') or full_soup.find('div', class_='entry-content')
+                if not content_div:
+                    content_div = full_soup.find('article') or full_soup.find('body')
+
+        if not content_div:
+            tqdm.write(f"WARNING: Could not find any content body for {html_file}. Skipping.")
+            return None
+
+        # --- Extract Post Details (from the original full soup) ---
+        title = full_soup.find('h3', class_='entry-header') or full_soup.find('h3')
         title_text = title.get_text(strip=True) if title else "Untitled Post"
         local_file_slug = os.path.splitext(os.path.basename(html_file))[0]
-        canonical_link = soup.find('link', rel='canonical')
-        original_post_url = canonical_link['href'] if canonical_link else (soup.find('a', class_='permalink')['href'] if soup.find('a', class_='permalink') else None)
+        canonical_link = full_soup.find('link', rel='canonical')
+        original_post_url = canonical_link['href'] if canonical_link else (full_soup.find('a', class_='permalink')['href'] if full_soup.find('a', class_='permalink') else None)
         if not original_post_url:
             original_post_url = urljoin(args.blog_url or "", local_file_slug + ".html")
         post_name = urlparse(original_post_url).path.strip('/').split('/')[-1].replace('.html', '')
@@ -201,7 +274,7 @@ def process_single_file(html_file, stem_map, basename_map, args):
         # --- Find and parse the date with fallbacks ---
         publish_date = None
         date_text = ""
-        date_tag = soup.find('p', class_='entry-footer-info') or soup.find('p', class_='posted') or soup.find('h2', class_='date-header')
+        date_tag = full_soup.find('p', class_='entry-footer-info') or full_soup.find('p', class_='posted') or full_soup.find('h2', class_='date-header')
         if date_tag:
             date_text = "".join(date_tag.strings)
             publish_date = parse_date(date_text)
@@ -217,34 +290,8 @@ def process_single_file(html_file, stem_map, basename_map, args):
         if not publish_date:
             publish_date = datetime.now()
 
-        author_tag = soup.find('div', class_=lambda c: c and c.startswith('entry-author-'))
+        author_tag = full_soup.find('div', class_=lambda c: c and c.startswith('entry-author-'))
         author_name = author_tag['class'][0].replace('entry-author-', '') if author_tag else DEFAULT_AUTHOR
-
-        # --- Extract and Clean Content ---
-        content_div = None
-        # Special logic for blogs where content starts at the first h3 in a div.content
-        if args.content_start_h3:
-            content_container = soup.find('div', class_='content')
-            if content_container:
-                start_node = content_container.find('h3')
-                if start_node:
-                    content_div = soup.new_tag('div')
-                    content_div.append(start_node)
-                    for sibling in start_node.find_next_siblings():
-                        # Stop if we hit the Trackbacks or Comments sections
-                        if sibling.name == 'h2' and sibling.find('a', id={'trackback', 'comments'}):
-                            break
-                        content_div.append(sibling)
-        
-        # If the new logic didn't run or didn't find content, fall back to the original method
-        if not content_div:
-            content_div = soup.find('div', class_='entry-body') or soup.find('div', class_='entry-content')
-            if not content_div:
-                content_div = soup.find('article') or soup.find('body')
-
-        if not content_div:
-            tqdm.write(f"WARNING: Could not find any content body for {html_file}. Skipping.")
-            return None
 
         content_soup = process_content(
             content_div, stem_map, basename_map, local_file_slug, args.blog_url,
@@ -280,6 +327,7 @@ def main():
     parser.add_argument("--blog_url", help="The original root URL of the blog (e.g., 'https://myblog.typepad.com/blog/').", default="http://example.com/blog")
     parser.add_argument("--do-not-require-blog-url", action="store_true", help="Allow the script to run without a --blog_url. This is not recommended.")
     parser.add_argument("--content-start-h3", action="store_true", help="Use special content detection for blogs where content starts at the first H3 in a 'div.content'.")
+    parser.add_argument("--disable-intelligent-text-extract", action="store_true", help="Disable Trafilatura and use only manual content detection rules.")
     parser.add_argument("--disable-popup-scrubbing", action="store_true", help="Disables the removal of Typepad's image popup links.")
     parser.add_argument("--disable-div-rm", action="store_true", help="Disables the removal of all div tags from post content.")
     parser.add_argument("--disable-br-rm", action="store_true", help="Disables removing <br> tags and cleaning up whitespace.")
