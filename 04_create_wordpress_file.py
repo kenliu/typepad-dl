@@ -221,11 +221,30 @@ def process_single_file(html_file, stem_map, basename_map, args):
         author_name = author_tag['class'][0].replace('entry-author-', '') if author_tag else DEFAULT_AUTHOR
 
         # --- Extract and Clean Content ---
-        content_div = soup.find('div', class_='entry-body') or soup.find('div', class_='entry-content')
+        content_div = None
+        # Special logic for blogs where content starts at the first h3 in a div.content
+        if args.content_start_h3:
+            content_container = soup.find('div', class_='content')
+            if content_container:
+                start_node = content_container.find('h3')
+                if start_node:
+                    content_div = soup.new_tag('div')
+                    content_div.append(start_node)
+                    for sibling in start_node.find_next_siblings():
+                        # Stop if we hit the Trackbacks or Comments sections
+                        if sibling.name == 'h2' and sibling.find('a', id={'trackback', 'comments'}):
+                            break
+                        content_div.append(sibling)
+        
+        # If the new logic didn't run or didn't find content, fall back to the original method
         if not content_div:
-            content_div = soup.find('article') or soup.find('body')
+            content_div = soup.find('div', class_='entry-body') or soup.find('div', class_='entry-content')
             if not content_div:
-                return None # Skip this file if no content is found
+                content_div = soup.find('article') or soup.find('body')
+
+        if not content_div:
+            tqdm.write(f"WARNING: Could not find any content body for {html_file}. Skipping.")
+            return None
 
         content_soup = process_content(
             content_div, stem_map, basename_map, local_file_slug, args.blog_url,
@@ -260,6 +279,7 @@ def main():
     parser.add_argument("--blog_title", help="The title of your blog (e.g., 'My Awesome Blog').", default="Archived Typepad Blog")
     parser.add_argument("--blog_url", help="The original root URL of the blog (e.g., 'https://myblog.typepad.com/blog/').", default="http://example.com/blog")
     parser.add_argument("--do-not-require-blog-url", action="store_true", help="Allow the script to run without a --blog_url. This is not recommended.")
+    parser.add_argument("--content-start-h3", action="store_true", help="Use special content detection for blogs where content starts at the first H3 in a 'div.content'.")
     parser.add_argument("--disable-popup-scrubbing", action="store_true", help="Disables the removal of Typepad's image popup links.")
     parser.add_argument("--disable-div-rm", action="store_true", help="Disables the removal of all div tags from post content.")
     parser.add_argument("--disable-br-rm", action="store_true", help="Disables removing <br> tags and cleaning up whitespace.")
