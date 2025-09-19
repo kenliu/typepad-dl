@@ -72,10 +72,10 @@ def mark_page_as_scanned(page_number):
     with open(SCANNED_FILE, 'a') as f:
         f.write(str(page_number) + '\n')
 
-def extract_permalinks(html_content, permalink_prefix):
+def extract_permalinks_default(html_content, permalink_prefix):
     """
-    Uses BeautifulSoup to parse the HTML, find all links with the exact text "Permalink",
-    and returns their href attributes if they match the blog's URL structure.
+    The default method. Uses BeautifulSoup to parse the HTML, find all links 
+    with the exact text "Permalink", and returns their href attributes.
     Args:
         html_content (str): The raw HTML of a webpage.
         permalink_prefix (str): The base URL string that valid permalinks should start with.
@@ -85,14 +85,36 @@ def extract_permalinks(html_content, permalink_prefix):
     soup = BeautifulSoup(html_content, 'html.parser')
     permalinks = set()
     
-    # We now iterate through all links and check for the specific link text.
     for link in soup.find_all('a', href=True):
-        # .get_text(strip=True) cleanly gets the text content of the tag.
         if link.get_text(strip=True) == 'Permalink':
             href = link['href']
-            # We run a sanity check to ensure the link belongs to the target blog.
             if href.startswith(permalink_prefix):
                 permalinks.add(href)
+                
+    return permalinks
+
+def extract_permalinks_alternative(html_content, permalink_prefix):
+    """
+    An alternative method. Uses a regular expression to find links that match a 
+    common blog post URL structure (e.g., /YYYY/MM/post-title.html).
+    Args:
+        html_content (str): The raw HTML of a webpage.
+        permalink_prefix (str): The base URL string that valid permalinks should start with.
+    Returns:
+        A set of unique permalink URLs found on the page.
+    """
+    soup = BeautifulSoup(html_content, 'html.parser')
+    permalinks = set()
+    
+    # This regex looks for URLs like /2024/05/some-post.html
+    # It checks for 4 digits (year), 2 digits (month), and text ending in .html
+    # You might need to adjust this pattern for different blog structures.
+    post_pattern = re.compile(r'/\d{4}/\d{2}/[^/]+\.html')
+    
+    for link in soup.find_all('a', href=True):
+        href = link['href']
+        if href.startswith(permalink_prefix) and post_pattern.search(href):
+            permalinks.add(href)
                 
     return permalinks
 
@@ -110,23 +132,19 @@ def check_for_next_page(html_content, current_page_num):
     """
     soup = BeautifulSoup(html_content, 'html.parser')
     
-    # Find the link on the right side of the pager.
     next_link = soup.select_one('div.pager-inner span.pager-right a')
     
     if not next_link:
         return False
         
-    # Check for indicators of a "Next" link, like the text 'Next' or the '»' symbol.
     link_text = next_link.get_text(strip=True).lower()
     if 'next' not in link_text and '»' not in link_text:
         return False
 
-    # Extract the URL and perform the sanity check.
     next_href = next_link.get('href')
     if not next_href:
         return False
     
-    # Use a regular expression to find the page number in the URL.
     match = re.search(r'/page/(\d+)/?$', next_href)
     if not match:
         tqdm.write(f"WARNING: Found 'Next' link with an unexpected URL format: {next_href}")
@@ -153,7 +171,20 @@ def main():
     """
     parser = argparse.ArgumentParser(description="Scrape permalinks from a Typepad-style blog by iterating through its pages.")
     parser.add_argument("blog_url", help="The root URL of the blog (e.g., 'https://growabrain.typepad.com/growabrain/')")
+    parser.add_argument(
+        "--alternative-permalink-extraction",
+        action="store_true",
+        help="Use an alternative method to find permalinks based on URL structure (e.g., /YYYY/MM/post.html)."
+    )
     args = parser.parse_args()
+
+    # --- Set the permalink extraction function based on the command-line flag ---
+    if args.alternative_permalink_extraction:
+        logging.info("Using alternative permalink extraction based on URL structure.")
+        permalink_extractor = extract_permalinks_alternative
+    else:
+        logging.info("Using default permalink extraction (looking for 'Permalink' text).")
+        permalink_extractor = extract_permalinks_default
 
     # --- Derive URLs from the input ---
     parsed_url = urlparse(args.blog_url)
@@ -230,7 +261,8 @@ def main():
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(response_content)
 
-            permalinks = extract_permalinks(response_content, PERMALINK_PREFIX)
+            # Call the selected extractor function
+            permalinks = permalink_extractor(response_content, PERMALINK_PREFIX)
             if permalinks:
                 save_permalinks(permalinks)
                 total_permalinks_found += len(permalinks)
