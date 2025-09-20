@@ -210,29 +210,26 @@ def log_url_as_downloaded(url, lock):
         with open(DOWNLOADED_LOG_FILE, 'a') as f:
             f.write(url + '\n')
 
-def generate_filename_from_url(url, blog_base_url):
+def generate_filename_from_url(url, blog_base_url, post_index):
     """
     Generates a filename from a URL. It tries to find a YYYY/MM date in the
-    path to create a YYYY_MM_slug.html filename, which helps the next script.
-    If no date is found, it falls back to just using the slug.
+    path and uses a sequential index to create a YYYY_MM_####_slug.html filename.
     """
     parsed_url = urlparse(url)
     path = parsed_url.path
-
-    # The end of the path, like 'my-post-title' from '/path/to/my-post-title.html'
     slug = os.path.splitext(os.path.basename(path))[0]
-
-    # Look for a /YYYY/MM/ pattern in the URL path.
     date_match = re.search(r'/(\d{4})/(\d{2})/', path)
 
+    # Convert the index to a zero-padded string (e.g., 9 becomes "0009")
+    # Using 4 digits allows for up to 9,999 posts.
+    order_prefix = str(post_index).zfill(4)
+
     if date_match:
-        # If found, use it to create the 'YYYY_MM_slug' format
         year = date_match.group(1)
         month = date_match.group(2)
-        return f"{year}_{month}_{slug}"
+        return f"{year}_{month}_{order_prefix}_{slug}"
     else:
-        # If no date is in the path, just return the slug as the filename.
-        return slug
+        return f"{order_prefix}_{slug}"
 
 def get_file_extension_from_content_type(content_type):
     content_type_map = {
@@ -296,10 +293,10 @@ def download_file(session, url, save_path, fail_fast_on_500=False):
     tqdm.write(f"ERROR: Failed to download {url} after {MAX_RETRIES} attempts.")
     return False
 
-def process_url(url, blog_base_url, session, lock):
+def process_url(post_index, url, blog_base_url, session, lock):
     stats = {"posts_processed": 0, "media_downloaded": 0, "media_failed": 0}
     
-    base_filename = generate_filename_from_url(url, blog_base_url)
+    base_filename = generate_filename_from_url(url, blog_base_url, post_index)
     html_filename = os.path.splitext(base_filename)[0] + ".html"
     html_save_path = os.path.join(POSTS_DIR, html_filename)
 
@@ -408,17 +405,33 @@ def main():
     logging.info(f"Using Blog Base URL: {BLOG_BASE_URL}")
 
     setup_environment()
-    all_post_urls = get_post_urls()
-    downloaded_urls = get_already_downloaded_urls()
-    urls_to_process = [url for url in all_post_urls if url not in downloaded_urls]
+    all_post_urls_raw = get_post_urls()
+
+    # --- Deduplicate URLs while preserving order ---
+    seen_urls = set()
+    unique_ordered_urls = []
+    for url in all_post_urls_raw:
+        if url not in seen_urls:
+            seen_urls.add(url)
+            unique_ordered_urls.append(url)
     
-    if not urls_to_process:
+    total_unique_urls = len(unique_ordered_urls)
+    logging.info(f"Found {len(all_post_urls_raw)} total URLs in permalinks.txt, with {total_unique_urls} unique URLs.")
+    # --- End Deduplication ---
+
+    downloaded_urls = get_already_downloaded_urls()
+    
+    # Create a dictionary of URLs to process with their original index from the unique list
+    urls_to_process_with_index = {
+        url: i for i, url in enumerate(unique_ordered_urls) if url not in downloaded_urls
+    }
+    
+    if not urls_to_process_with_index:
         logging.info("All posts have already been downloaded. Exiting.")
         return
 
-    logging.info(f"Found {len(all_post_urls)} total post URLs.")
     logging.info(f"{len(downloaded_urls)} posts already downloaded.")
-    logging.info(f"Starting download of {len(urls_to_process)} new posts using {MAX_WORKERS} workers.")
+    logging.info(f"Starting download of {len(urls_to_process_with_index)} new posts using {MAX_WORKERS} workers.")
     
     session = requests.Session()
     file_lock = threading.Lock()
@@ -427,9 +440,13 @@ def main():
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            future_to_url = {executor.submit(process_url, url, BLOG_BASE_URL, session, file_lock): url for url in urls_to_process}
+            # Pass the original index 'i' along with the url
+            future_to_url = {
+                executor.submit(process_url, i, url, BLOG_BASE_URL, session, file_lock): url
+                for url, i in urls_to_process_with_index.items()
+            }
             
-            for future in tqdm(concurrent.futures.as_completed(future_to_url), total=len(urls_to_process), desc="Downloading Posts"):
+            for future in tqdm(concurrent.futures.as_completed(future_to_url), total=len(urls_to_process_with_index), desc="Downloading Posts"):
                 try:
                     result = future.result()
                     if result:
@@ -455,3 +472,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
