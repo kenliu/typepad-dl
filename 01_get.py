@@ -3,7 +3,7 @@ import re
 import time
 import logging
 import argparse
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from curl_cffi import requests
 from bs4 import BeautifulSoup
 from tqdm import tqdm
@@ -22,9 +22,7 @@ RETRY_DELAY = 30
 # The browser profile to impersonate to avoid being blocked.
 IMPERSONATE_BROWSER = "chrome110"
 
-# --- Setup Logging ---
-# Configures basic logging. Using a simple format to avoid clutter with the progress bar.
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+# --- Logging will be configured in main() ---
 
 def setup_environment():
     """
@@ -72,50 +70,60 @@ def mark_page_as_scanned(page_number):
     with open(SCANNED_FILE, 'a') as f:
         f.write(str(page_number) + '\n')
 
-def extract_permalinks_default(html_content, permalink_prefix):
+def extract_permalinks_default(html_content, page_url, blog_name=None):
     """
-    The default method. Uses BeautifulSoup to parse the HTML, find all links 
+    The default method. Uses BeautifulSoup to parse the HTML, find all links
     with the exact text "Permalink", and returns their href attributes.
     Args:
         html_content (str): The raw HTML of a webpage.
-        permalink_prefix (str): The base URL string that valid permalinks should start with.
+        page_url (str): The URL of the page being scanned, used to resolve relative links.
+        blog_name (str, optional): The name of the blog. Not used in this method. Defaults to None.
     Returns:
         A set of unique permalink URLs found on the page.
     """
     soup = BeautifulSoup(html_content, 'html.parser')
     permalinks = set()
-    
+    # The prefix is derived from the page_url for this specific method
+    parsed_url = urlparse(page_url)
+    permalink_prefix = f"{parsed_url.scheme}://{parsed_url.netloc}/{blog_name}/"
+
+
     for link in soup.find_all('a', href=True):
         if link.get_text(strip=True) == 'Permalink':
             href = link['href']
-            if href.startswith(permalink_prefix):
-                permalinks.add(href)
-                
+            # Join URL to handle relative links, then check prefix
+            absolute_url = urljoin(page_url, href)
+            if absolute_url.startswith(permalink_prefix):
+                permalinks.add(absolute_url)
+
     return permalinks
 
-def extract_permalinks_alternative(html_content, permalink_prefix):
+def extract_permalinks_alternative(html_content, page_url, blog_name=None):
     """
-    An alternative method. Uses a regular expression to find links that match a 
-    common blog post URL structure (e.g., /YYYY/MM/post-title.html).
+    An alternative method. Uses a flexible regular expression to find links that match a
+    common blog post URL structure (e.g., /YYYY/MM/post-title.html). It will find links
+    from any domain on the page that match the pattern.
     Args:
         html_content (str): The raw HTML of a webpage.
-        permalink_prefix (str): The base URL string that valid permalinks should start with.
+        page_url (str): The URL of the page being scanned, used to resolve relative links.
+        blog_name (str, optional): The name of the blog. Not used in this method. Defaults to None.
     Returns:
         A set of unique permalink URLs found on the page.
     """
     soup = BeautifulSoup(html_content, 'html.parser')
     permalinks = set()
-    
-    # This regex looks for URLs like /2024/05/some-post.html
-    # It checks for 4 digits (year), 2 digits (month), and text ending in .html
-    # You might need to adjust this pattern for different blog structures.
+
+    # This regex is flexible and looks for any path with a /YYYY/MM/ structure.
     post_pattern = re.compile(r'/\d{4}/\d{2}/[^/]+\.html')
-    
+
     for link in soup.find_all('a', href=True):
         href = link['href']
-        if href.startswith(permalink_prefix) and post_pattern.search(href):
-            permalinks.add(href)
-                
+        # Search for the pattern in the link
+        if post_pattern.search(href):
+            # Resolve relative URLs (e.g., "/2024/01/post.html") into full URLs
+            absolute_url = urljoin(page_url, href)
+            permalinks.add(absolute_url)
+
     return permalinks
 
 def check_for_next_page(html_content, current_page_num):
@@ -131,37 +139,44 @@ def check_for_next_page(html_content, current_page_num):
         bool: True if a valid next page exists, False otherwise.
     """
     soup = BeautifulSoup(html_content, 'html.parser')
-    
+
     next_link = soup.select_one('div.pager-inner span.pager-right a')
-    
+
     if not next_link:
+        logging.debug("CheckNextPage: Did not find a 'Next' link element using the selector.")
         return False
-        
+
     link_text = next_link.get_text(strip=True).lower()
     if 'next' not in link_text and '»' not in link_text:
+        logging.debug(f"CheckNextPage: Link text '{link_text}' does not contain 'next' or '»'.")
         return False
 
     next_href = next_link.get('href')
     if not next_href:
+        logging.debug("CheckNextPage: 'Next' link found, but it has no href attribute.")
         return False
-    
+
     match = re.search(r'/page/(\d+)/?$', next_href)
     if not match:
+        logging.debug(f"CheckNextPage: Could not find page number in href '{next_href}'.")
         tqdm.write(f"WARNING: Found 'Next' link with an unexpected URL format: {next_href}")
         return False
-        
+
     try:
         next_page_num = int(match.group(1))
         expected_next_page = current_page_num + 1
-        
+
         if next_page_num == expected_next_page:
+            logging.debug(f"CheckNextPage: Found valid 'Next' link to page {next_page_num}.")
             return True
         else:
+            logging.debug(f"CheckNextPage: Sanity check fail. Current: {current_page_num}, Next link points to: {next_page_num}")
             tqdm.write(
                 f"WARNING: Sanity check failed: Current page is {current_page_num}, but 'Next' link points to page {next_page_num}."
             )
             return False
     except (ValueError, IndexError):
+        logging.debug(f"CheckNextPage: Failed to parse page number from '{next_href}'.")
         tqdm.write(f"WARNING: Could not parse page number from 'Next' link URL: {next_href}")
         return False
 
@@ -176,7 +191,16 @@ def main():
         action="store_true",
         help="Use an alternative method to find permalinks based on URL structure (e.g., /YYYY/MM/post.html)."
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging for detailed output."
+    )
     args = parser.parse_args()
+    
+    # --- Setup Logging ---
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(level=log_level, format='%(levelname)s: %(message)s')
 
     # --- Set the permalink extraction function based on the command-line flag ---
     if args.alternative_permalink_extraction:
@@ -196,10 +220,10 @@ def main():
     blog_name = path_parts[0] if path_parts else parsed_url.netloc.split('.')[0]
 
     BASE_URL = f"{parsed_url.scheme}://{parsed_url.netloc}/{blog_name}/page/{{}}/"
-    PERMALINK_PREFIX = f"{parsed_url.scheme}://{parsed_url.netloc}/{blog_name}/"
     
     logging.info(f"Using Base URL for pages: {BASE_URL.format('<num>')}")
-    logging.info(f"Using Permalink Prefix: {PERMALINK_PREFIX}")
+    logging.info(f"Using Blog Name: '{blog_name}'")
+
 
     setup_environment()
     scanned_pages = get_already_scanned_pages()
@@ -224,7 +248,9 @@ def main():
 
             while retries < max_retries:
                 try:
+                    logging.debug(f"Requesting URL: {url}")
                     response = session.get(url, impersonate=IMPERSONATE_BROWSER, timeout=20)
+                    logging.debug(f"Received status code {response.status_code} for {url}")
 
                     if response.status_code == 200:
                         response_content = response.text
@@ -262,10 +288,13 @@ def main():
                 f.write(response_content)
 
             # Call the selected extractor function
-            permalinks = permalink_extractor(response_content, PERMALINK_PREFIX)
+            permalinks = permalink_extractor(response_content, url, blog_name)
             if permalinks:
+                logging.debug(f"Found {len(permalinks)} permalinks on page {page_num}.")
                 save_permalinks(permalinks)
                 total_permalinks_found += len(permalinks)
+            else:
+                logging.debug(f"No permalinks found on page {page_num} with the current extraction method.")
             
             pbar.set_postfix(found=f"{total_permalinks_found} permalinks")
             mark_page_as_scanned(page_num)
