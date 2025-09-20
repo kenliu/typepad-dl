@@ -70,23 +70,21 @@ def mark_page_as_scanned(page_number):
     with open(SCANNED_FILE, 'a') as f:
         f.write(str(page_number) + '\n')
 
-def extract_permalinks_default(html_content, page_url, blog_name=None):
+def extract_permalinks_default(html_content, page_url, blog_name):
     """
     The default method. Uses BeautifulSoup to parse the HTML, find all links
     with the exact text "Permalink", and returns their href attributes.
     Args:
         html_content (str): The raw HTML of a webpage.
         page_url (str): The URL of the page being scanned, used to resolve relative links.
-        blog_name (str, optional): The name of the blog. Not used in this method. Defaults to None.
+        blog_name (str): The name of the blog, used to construct the permalink prefix.
     Returns:
         A set of unique permalink URLs found on the page.
     """
     soup = BeautifulSoup(html_content, 'html.parser')
     permalinks = set()
-    # The prefix is derived from the page_url for this specific method
     parsed_url = urlparse(page_url)
     permalink_prefix = f"{parsed_url.scheme}://{parsed_url.netloc}/{blog_name}/"
-
 
     for link in soup.find_all('a', href=True):
         if link.get_text(strip=True) == 'Permalink':
@@ -187,11 +185,6 @@ def main():
     parser = argparse.ArgumentParser(description="Scrape permalinks from a Typepad-style blog by iterating through its pages.")
     parser.add_argument("blog_url", help="The root URL of the blog (e.g., 'https://growabrain.typepad.com/growabrain/')")
     parser.add_argument(
-        "--alternative-permalink-extraction",
-        action="store_true",
-        help="Use an alternative method to find permalinks based on URL structure (e.g., /YYYY/MM/post.html)."
-    )
-    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging for detailed output."
@@ -201,14 +194,6 @@ def main():
     # --- Setup Logging ---
     log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(level=log_level, format='%(levelname)s: %(message)s')
-
-    # --- Set the permalink extraction function based on the command-line flag ---
-    if args.alternative_permalink_extraction:
-        logging.info("Using alternative permalink extraction based on URL structure.")
-        permalink_extractor = extract_permalinks_alternative
-    else:
-        logging.info("Using default permalink extraction (looking for 'Permalink' text).")
-        permalink_extractor = extract_permalinks_default
 
     # --- Derive URLs from the input ---
     parsed_url = urlparse(args.blog_url)
@@ -223,7 +208,6 @@ def main():
     
     logging.info(f"Using Base URL for pages: {BASE_URL.format('<num>')}")
     logging.info(f"Using Blog Name: '{blog_name}'")
-
 
     setup_environment()
     scanned_pages = get_already_scanned_pages()
@@ -287,14 +271,23 @@ def main():
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(response_content)
 
-            # Call the selected extractor function
-            permalinks = permalink_extractor(response_content, url, blog_name)
+            # --- Permalink Extraction with Fallback Logic ---
+            # Try the standard method first (looks for "Permalink" text).
+            logging.debug(f"Using standard extraction method on page {page_num}.")
+            permalinks = extract_permalinks_default(response_content, url, blog_name)
+            
+            # If the standard method finds nothing, fallback to the alternative method.
+            if not permalinks:
+                logging.debug(f"Standard method found no links. Trying alternative method as a fallback on page {page_num}.")
+                permalinks = extract_permalinks_alternative(response_content, url, blog_name)
+
+            # --- Save found permalinks ---
             if permalinks:
                 logging.debug(f"Found {len(permalinks)} permalinks on page {page_num}.")
                 save_permalinks(permalinks)
                 total_permalinks_found += len(permalinks)
             else:
-                logging.debug(f"No permalinks found on page {page_num} with the current extraction method.")
+                logging.debug(f"No permalinks found on page {page_num} using any available method.")
             
             pbar.set_postfix(found=f"{total_permalinks_found} permalinks")
             mark_page_as_scanned(page_num)
