@@ -211,10 +211,28 @@ def log_url_as_downloaded(url, lock):
             f.write(url + '\n')
 
 def generate_filename_from_url(url, blog_base_url):
-    if url.startswith(blog_base_url):
-        short_path = url[len(blog_base_url):]
-        return short_path.replace('/', '_')
-    return os.path.basename(urlparse(url).path)
+    """
+    Generates a filename from a URL. It tries to find a YYYY/MM date in the
+    path to create a YYYY_MM_slug.html filename, which helps the next script.
+    If no date is found, it falls back to just using the slug.
+    """
+    parsed_url = urlparse(url)
+    path = parsed_url.path
+
+    # The end of the path, like 'my-post-title' from '/path/to/my-post-title.html'
+    slug = os.path.splitext(os.path.basename(path))[0]
+
+    # Look for a /YYYY/MM/ pattern in the URL path.
+    date_match = re.search(r'/(\d{4})/(\d{2})/', path)
+
+    if date_match:
+        # If found, use it to create the 'YYYY_MM_slug' format
+        year = date_match.group(1)
+        month = date_match.group(2)
+        return f"{year}_{month}_{slug}"
+    else:
+        # If no date is in the path, just return the slug as the filename.
+        return slug
 
 def get_file_extension_from_content_type(content_type):
     content_type_map = {
