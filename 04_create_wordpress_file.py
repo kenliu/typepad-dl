@@ -8,7 +8,7 @@ from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from lxml.html import tostring
 from tqdm import tqdm
-from datetime import datetime
+from datetime import datetime, timedelta
 import argparse
 import concurrent.futures
 from itertools import repeat
@@ -252,15 +252,35 @@ def process_single_file(html_file, stem_map, basename_map, args):
         if date_tag:
             date_text = "".join(date_tag.strings)
             publish_date = parse_date(date_text)
+        
+        # --- Date Fallback and Order Preservation ---
+        # First, find the order number from the filename (e.g., from YYYY_MM_####_slug)
+        order_number = 9999 # Default to a high number if not found
+        order_match = re.search(r'_(\d{4})_', local_file_slug)
+        if order_match:
+            order_number = int(order_match.group(1))
+
         if not publish_date:
-            try:
-                filename_parts = local_file_slug.split('_')
-                if len(filename_parts) >= 2 and filename_parts[0].isdigit() and filename_parts[1].isdigit():
-                    year = int(filename_parts[0])
-                    month = int(filename_parts[1])
-                    publish_date = datetime(year, month, 1)
-            except (ValueError, IndexError):
-                pass
+            if args.debug:
+                tqdm.write(f"DEBUG: No date found in content for {local_file_slug}. Attempting fallback from filename.")
+            
+            # Regex to find YYYY_MM from the start of the slug
+            date_match = re.match(r'(\d{4})_(\d{2})', local_file_slug)
+            if date_match:
+                try:
+                    year = int(date_match.group(1))
+                    month = int(date_match.group(2))
+                    # Set base time to the end of the first day of the month
+                    publish_date = datetime(year, month, 1, 23, 59)
+                    # Subtract minutes based on order to preserve sequence (newer posts have smaller numbers)
+                    publish_date -= timedelta(minutes=order_number)
+                    if args.debug:
+                        tqdm.write(f"DEBUG: Parsed date for {local_file_slug} as {publish_date.strftime('%Y-%m-%d %H:%M:%S')}")
+                except (ValueError, IndexError):
+                    pass # Will fall through to datetime.now()
+            elif args.debug:
+                tqdm.write(f"DEBUG: Filename '{local_file_slug}' did not match expected YYYY_MM pattern.")
+
         if not publish_date:
             publish_date = datetime.now()
 
@@ -284,7 +304,8 @@ def process_single_file(html_file, stem_map, basename_map, args):
             "publish_date": publish_date,
             "author_name": author_name,
             "post_name": post_name,
-            "content_html": content_html
+            "content_html": content_html,
+            "order_number": order_number # Return the order number for sorting
         }
     except Exception as e:
         # Using tqdm.write is thread-safe for printing from workers
@@ -306,6 +327,7 @@ def main():
     parser.add_argument("--disable-div-rm", action="store_true", help="Disables the removal of all div tags from post content.")
     parser.add_argument("--disable-br-rm", action="store_true", help="Disables removing <br> tags and cleaning up whitespace.")
     parser.add_argument("--max-posts-per-file", type=int, default=0, help="Split the output into multiple files with this many posts per file. Default is 0 (all in one file).")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging for troubleshooting date parsing.")
     args = parser.parse_args()
 
     # --- Validate blog_url argument ---
@@ -378,7 +400,14 @@ def main():
             if post_data:
                 processed_posts_data.append(post_data)
 
-    # --- 4. Start Building the WXR File ---
+    # --- 4. Sort Posts by Order Number ---
+    # This is crucial to ensure posts are written to the XML in chronological order.
+    # The sort key is the 'order_number' extracted from the filename.
+    logging.info("Sorting posts to preserve original chronological order...")
+    processed_posts_data.sort(key=lambda p: p['order_number'])
+    logging.info("Sorting complete.")
+
+    # --- 5. Start Building the WXR File ---
     wxr_header = f"""<?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0"
     xmlns:excerpt="http://wordpress.org/export/1.2/excerpt/"
@@ -397,7 +426,7 @@ def main():
 """
 
     all_wxr_items = []
-    # --- Assemble WXR items sequentially AFTER parallel processing ---
+    # --- Assemble WXR items sequentially AFTER parallel processing AND sorting ---
     for i, post_data in enumerate(processed_posts_data):
         item = f"""
     <item>
@@ -425,7 +454,7 @@ def main():
 """
         all_wxr_items.append(item)
 
-    # --- 5. Finalize and Save the WXR File(s) ---
+    # --- 6. Finalize and Save the WXR File(s) ---
     wxr_footer = """
 </channel>
 </rss>
