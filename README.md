@@ -1,6 +1,6 @@
 # Typepad Blog Archiver & WordPress Importer 📚
 
-A comprehensive tool to archive your entire Typepad blog and seamlessly migrate it to WordPress. Save your content, preserve your media, and move!
+A comprehensive tool to archive your entire Typepad blog and seamlessly migrate it to WordPress. Save your content, preserve your media, and move\!
 
 ## 🚀 Quick Start
 
@@ -15,6 +15,11 @@ pip3 install -r requirements.txt
 > **Windows Users:** The `python-magic-bin` package, included in `requirements.txt`, has the necessary files for Windows.
 
 ### Step-by-Step Migration
+
+> **Note on Custom Domains:** If your blog uses a custom domain (like `https://blawg.com`), you should use the original Typepad URL for the first step and your custom domain for the last step.
+>
+>   - **Step 1** should use the `.typepad.com` URL (e.g., `https://blawg.typepad.com/blawg/`) to ensure all posts are found.
+>   - **Step 4** should use the final custom domain URL (e.g., `https://blawg.com`) so all links are rewritten correctly for your new site.
 
 #### Step 1: Discover All Posts
 
