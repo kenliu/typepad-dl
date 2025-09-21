@@ -293,8 +293,9 @@ def download_file(session, url, save_path, fail_fast_on_500=False):
     tqdm.write(f"ERROR: Failed to download {url} after {MAX_RETRIES} attempts.")
     return False
 
-def process_url(post_index, url, blog_base_url, session, lock):
+def process_url(post_index, url, blog_base_url, blog_name, session, lock):
     stats = {"posts_processed": 0, "media_downloaded": 0, "media_failed": 0}
+    blog_domain = urlparse(blog_base_url).netloc
     
     base_filename = generate_filename_from_url(url, blog_base_url, post_index)
     html_filename = os.path.splitext(base_filename)[0] + ".html"
@@ -351,10 +352,32 @@ def process_url(post_index, url, blog_base_url, session, lock):
             url_attr = 'src' if is_image else 'href'
             link = tag.get(url_attr, '')
 
-            if not link or (not is_image and '.typepad.com/.a/' not in link):
+            if not link:
                 continue
-
+            
             original_full_url = urljoin(url, link)
+
+            # --- MODIFIED LOGIC ---
+            if is_image:
+                # For images, only download if they are from the same domain as the blog
+                if blog_domain not in original_full_url:
+                    debug_print(f"Skipping external image: {original_full_url}")
+                    continue
+            else: # This is an <a> tag
+                is_typepad_media_link = '.typepad.com/.a/' in original_full_url
+                is_direct_file_on_domain = blog_domain in original_full_url and blog_name in original_full_url
+                
+                # A link is a candidate if it's a special media link OR a direct file on our specific blog
+                if not (is_typepad_media_link or is_direct_file_on_domain):
+                    debug_print(f"Skipping external or irrelevant link: {original_full_url}")
+                    continue
+
+                # Now, block links that are just other web pages
+                path = urlparse(original_full_url).path.lower()
+                if path.endswith(('.html', '.htm')) or path == '' or path.endswith('/'):
+                    continue
+            # --- END MODIFIED LOGIC ---
+
             media_filename = os.path.basename(urlparse(original_full_url).path)
             if not media_filename: media_filename = f"media_{i}"
             
@@ -440,9 +463,9 @@ def main():
 
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # Pass the original index 'i' along with the url
+            # Pass the original index 'i' and blog_name along with the url
             future_to_url = {
-                executor.submit(process_url, i, url, BLOG_BASE_URL, session, file_lock): url
+                executor.submit(process_url, i, url, BLOG_BASE_URL, blog_name, session, file_lock): url
                 for url, i in urls_to_process_with_index.items()
             }
             
@@ -472,4 +495,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
