@@ -16,10 +16,11 @@ pip3 install -r requirements.txt
 
 ### Step-by-Step Migration
 
-> **Note on Custom Domains:** If your blog uses a custom domain (like `https://blawg.com`), you should use the original Typepad URL for the first step and your custom domain for the last step.
+> **Note on Custom Domains:** If your blog uses a custom domain (like `https://blawg.com`), you should use the original Typepad URL for the first two steps and your custom domain for the last step.
 >
 >   - **Step 1** should use the `.typepad.com` URL (e.g., `https://blawg.typepad.com/blawg/`) to ensure all posts are found.
->   - **Step 4** should use the final custom domain URL (e.g., `https://blawg.com`) so all links are rewritten correctly for your new site.
+>   - **Step 2** should use the `.typepad.com` URL (e.g., `https://blawg.typepad.com/blawg/`)
+>   - **Step 4** should use the final custom domain URL (e.g., `https://blawg.com`) so all links are rewritten correctly for your new site (we're making the links relative, so need to be able to filter by the url that Typepad was using)
 
 #### Step 1: Discover All Posts
 
