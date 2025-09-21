@@ -20,8 +20,6 @@ DOWNLOADED_LOG_FILE = "downloaded_permalinks.txt"
 POSTS_DIR = "posts"
 # Directory for shared assets (CSS, JS, fonts, etc.)
 ASSETS_DIR = "posts/assets"
-# Number of concurrent download threads.
-MAX_WORKERS = 8
 # Retry logic for fetching files
 MAX_RETRIES = 3
 RETRY_DELAY = 5 # seconds
@@ -293,7 +291,7 @@ def download_file(session, url, save_path, fail_fast_on_500=False):
     tqdm.write(f"ERROR: Failed to download {url} after {MAX_RETRIES} attempts.")
     return False
 
-def process_url(post_index, url, blog_base_url, blog_name, session, lock):
+def process_url(post_index, url, blog_base_url, blog_name, session, lock, sleep_time):
     stats = {"posts_processed": 0, "media_downloaded": 0, "media_failed": 0}
     blog_domain = urlparse(blog_base_url).netloc
     
@@ -407,12 +405,19 @@ def process_url(post_index, url, blog_base_url, blog_name, session, lock):
                 tqdm.write(f"ERROR: All download attempts failed for media: {link}")
     
     log_url_as_downloaded(url, lock)
+    
+    # Sleep AFTER all work for this URL is done.
+    if sleep_time > 0:
+        time.sleep(sleep_time)
+        
     return stats
 
 def main():
     global DEBUG_MODE
     parser = argparse.ArgumentParser(description="Download all posts and their media from a Typepad-style blog.")
     parser.add_argument("blog_url", help="The root URL of the blog (e.g., 'https://growabrain.typepad.com/growabrain/')")
+    parser.add_argument("--threads", type=int, default=4, help="Number of concurrent download threads (default: 4).")
+    parser.add_argument("--sleep-time", type=float, default=0.5, help="Seconds for a worker to sleep after finishing a post (default: 0.5).")
     parser.add_argument("--debug", action="store_true", help="Enable debug output.")
     args = parser.parse_args()
     DEBUG_MODE = args.debug
@@ -454,7 +459,7 @@ def main():
         return
 
     logging.info(f"{len(downloaded_urls)} posts already downloaded.")
-    logging.info(f"Starting download of {len(urls_to_process_with_index)} new posts using {MAX_WORKERS} workers.")
+    logging.info(f"Starting download of {len(urls_to_process_with_index)} new posts using {args.threads} workers.")
     
     session = requests.Session()
     file_lock = threading.Lock()
@@ -462,14 +467,16 @@ def main():
     total_stats = {"posts_processed": 0, "media_downloaded": 0, "media_failed": 0}
 
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-            # Pass the original index 'i' and blog_name along with the url
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
+            # Submit all tasks to the executor at once.
             future_to_url = {
-                executor.submit(process_url, i, url, BLOG_BASE_URL, blog_name, session, file_lock): url
+                executor.submit(process_url, i, url, BLOG_BASE_URL, blog_name, session, file_lock, args.sleep_time): url
                 for url, i in urls_to_process_with_index.items()
             }
             
-            for future in tqdm(concurrent.futures.as_completed(future_to_url), total=len(urls_to_process_with_index), desc="Downloading Posts"):
+            # Process results as they are completed and show progress.
+            completed_iterator = concurrent.futures.as_completed(future_to_url)
+            for future in tqdm(completed_iterator, total=len(future_to_url), desc="Downloading Posts"):
                 try:
                     result = future.result()
                     if result:
