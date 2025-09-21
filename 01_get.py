@@ -185,12 +185,18 @@ def main():
     parser = argparse.ArgumentParser(description="Scrape permalinks from a Typepad-style blog by iterating through its pages.")
     parser.add_argument("blog_url", help="The root URL of the blog (e.g., 'https://growabrain.typepad.com/growabrain/')")
     parser.add_argument(
+        "--sleep-time",
+        type=float,
+        default=0.5,
+        help="The delay in seconds between page requests. Default: 0.5"
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug logging for detailed output."
     )
     args = parser.parse_args()
-    
+
     # --- Setup Logging ---
     log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(level=log_level, format='%(levelname)s: %(message)s')
@@ -205,7 +211,7 @@ def main():
     blog_name = path_parts[0] if path_parts else parsed_url.netloc.split('.')[0]
 
     BASE_URL = f"{parsed_url.scheme}://{parsed_url.netloc}/{blog_name}/page/{{}}/"
-    
+
     logging.info(f"Using Base URL for pages: {BASE_URL.format('<num>')}")
     logging.info(f"Using Blog Name: '{blog_name}'")
 
@@ -275,7 +281,7 @@ def main():
             # Try the standard method first (looks for "Permalink" text).
             logging.debug(f"Using standard extraction method on page {page_num}.")
             permalinks = extract_permalinks_default(response_content, url, blog_name)
-            
+
             # If the standard method finds nothing, fallback to the alternative method.
             if not permalinks:
                 logging.debug(f"Standard method found no links. Trying alternative method as a fallback on page {page_num}.")
@@ -288,16 +294,16 @@ def main():
                 total_permalinks_found += len(permalinks)
             else:
                 logging.debug(f"No permalinks found on page {page_num} using any available method.")
-            
+
             pbar.set_postfix(found=f"{total_permalinks_found} permalinks")
             mark_page_as_scanned(page_num)
-            
+
             if not check_for_next_page(response_content, page_num):
                 tqdm.write(f"No valid 'Next' link found on page {page_num}. Concluding scrape.")
                 break
 
             page_num += 1
-            time.sleep(0.5) # A small polite delay between pages
+            time.sleep(args.sleep_time) # A small polite delay between pages
 
     logging.info(f"Scraping process complete. Found a total of {total_permalinks_found} permalinks.")
 
