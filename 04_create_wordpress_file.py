@@ -78,6 +78,36 @@ def parse_date(date_str):
                     continue # This pattern failed, try the next one
     return None # If no patterns matched, return None
 
+def parse_french_date(date_str):
+    """
+    Parses a French date string (e.g., "31 juillet 2025").
+    """
+    if not date_str:
+        return None
+
+    # Map of French month names to English month names for parsing.
+    fr_to_en_months = {
+        'janvier': 'January', 'février': 'February', 'mars': 'March',
+        'avril': 'April', 'mai': 'May', 'juin': 'June',
+        'juillet': 'July', 'août': 'August', 'septembre': 'September',
+        'octobre': 'October', 'novembre': 'November', 'décembre': 'December'
+    }
+
+    # Make the string lowercase so it's easier to match.
+    date_str_lower = date_str.lower()
+    
+    for fr_month, en_month in fr_to_en_months.items():
+        if fr_month in date_str_lower:
+            # Change the French month to English.
+            english_date_str = date_str_lower.replace(fr_month, en_month)
+            try:
+                # Try to understand the date like "31 July 2025".
+                return datetime.strptime(english_date_str, "%d %B %Y")
+            except ValueError:
+                return None
+    
+    return None # If no French month was found, return None.
+
 
 def find_file_in_map(original_url, local_file_slug, stem_map, basename_map):
     """
@@ -248,11 +278,43 @@ def process_single_file(html_file, stem_map, basename_map, args):
         # --- Find and parse the date with fallbacks ---
         publish_date = None
         date_text = ""
-        date_tag = full_soup.find('p', class_='entry-footer-info') or full_soup.find('p', class_='posted') or full_soup.find('h2', class_='date-header')
-        if date_tag:
-            date_text = "".join(date_tag.strings)
-            publish_date = parse_date(date_text)
-        
+
+        # Priority 1: Try to parse a French date if the command line option is used.
+        if args.fr_date:
+            if args.debug:
+                tqdm.write(f"DEBUG [{local_file_slug}]: Attempting French date parsing...")
+            french_date_tag = full_soup.find('h2', class_='date-header')
+            if french_date_tag:
+                date_text = french_date_tag.get_text(strip=True)
+                if args.debug:
+                    tqdm.write(f"DEBUG [{local_file_slug}]:   Input: '{date_text}'")
+                publish_date = parse_french_date(date_text)
+                if args.debug:
+                    if publish_date:
+                        tqdm.write(f"DEBUG [{local_file_slug}]:   SUCCESS (French) -> {publish_date.strftime('%Y-%m-%d %H:%M:%S')}")
+                    else:
+                        tqdm.write(f"DEBUG [{local_file_slug}]:   FAILED (French).")
+            elif args.debug:
+                tqdm.write(f"DEBUG [{local_file_slug}]:   No <h2 class='date-header'> tag found.")
+
+        # Priority 2: Fallback to the original date parsing method if the French one fails or isn't used.
+        if not publish_date:
+            if args.debug:
+                tqdm.write(f"DEBUG [{local_file_slug}]: Attempting standard date parsing...")
+            date_tag = full_soup.find('p', class_='entry-footer-info') or full_soup.find('p', class_='posted') or full_soup.find('h2', class_='date-header')
+            if date_tag:
+                date_text = "".join(date_tag.strings).strip()
+                if args.debug:
+                    tqdm.write(f"DEBUG [{local_file_slug}]:   Input: '{date_text}'")
+                publish_date = parse_date(date_text)
+                if args.debug:
+                    if publish_date:
+                        tqdm.write(f"DEBUG [{local_file_slug}]:   SUCCESS (Standard) -> {publish_date.strftime('%Y-%m-%d %H:%M:%S')}")
+                    else:
+                        tqdm.write(f"DEBUG [{local_file_slug}]:   FAILED (Standard).")
+            elif args.debug:
+                tqdm.write(f"DEBUG [{local_file_slug}]:   No standard date tag found.")
+
         # --- Date Fallback and Order Preservation ---
         # First, find the order number from the filename (e.g., from YYYY_MM_####_slug)
         order_number = 9999 # Default to a high number if not found
@@ -262,7 +324,7 @@ def process_single_file(html_file, stem_map, basename_map, args):
 
         if not publish_date:
             if args.debug:
-                tqdm.write(f"DEBUG: No date found in content for {local_file_slug}. Attempting fallback from filename.")
+                tqdm.write(f"DEBUG [{local_file_slug}]: Attempting fallback from filename...")
             
             # Regex to find YYYY_MM from the start of the slug
             date_match = re.match(r'(\d{4})_(\d{2})', local_file_slug)
@@ -275,13 +337,15 @@ def process_single_file(html_file, stem_map, basename_map, args):
                     # Subtract minutes based on order to preserve sequence (newer posts have smaller numbers)
                     publish_date -= timedelta(minutes=order_number)
                     if args.debug:
-                        tqdm.write(f"DEBUG: Parsed date for {local_file_slug} as {publish_date.strftime('%Y-%m-%d %H:%M:%S')}")
+                        tqdm.write(f"DEBUG [{local_file_slug}]:   SUCCESS (Filename) -> {publish_date.strftime('%Y-%m-%d %H:%M:%S')}")
                 except (ValueError, IndexError):
                     pass # Will fall through to datetime.now()
             elif args.debug:
-                tqdm.write(f"DEBUG: Filename '{local_file_slug}' did not match expected YYYY_MM pattern.")
+                tqdm.write(f"DEBUG [{local_file_slug}]:   FAILED (Filename) - Filename did not match YYYY_MM pattern.")
 
         if not publish_date:
+            if args.debug:
+                tqdm.write(f"DEBUG [{local_file_slug}]: All parsing methods failed. Using current time.")
             publish_date = datetime.now()
 
         author_tag = full_soup.find('div', class_=lambda c: c and c.startswith('entry-author-'))
@@ -321,6 +385,7 @@ def main():
     parser.add_argument("--blog_title", help="The title of your blog (e.g., 'My Awesome Blog').", default="Archived Typepad Blog")
     parser.add_argument("--blog_url", help="The original root URL of the blog (e.g., 'https://myblog.typepad.com/blog/').", default="http://example.com/blog")
     parser.add_argument("--post-container-class", help="The CSS class name of the main post content area (e.g., 'entry-content').")
+    parser.add_argument("--fr-date", action="store_true", help="Prioritize parsing French dates from <h2 class='date-header'> tags.")
     parser.add_argument("--do-not-require-blog-url", action="store_true", help="Allow the script to run without a --blog_url. This is not recommended.")
     parser.add_argument("--disable-intelligent-text-extract", action="store_true", help="Disable Trafilatura and use only manual content detection rules.")
     parser.add_argument("--disable-popup-scrubbing", action="store_true", help="Disables the removal of Typepad's image popup links.")
@@ -332,7 +397,7 @@ def main():
 
     # --- Validate blog_url argument ---
     blog_url_is_default = args.blog_url == "http://example.com/blog"
-    if blog_url_is_default and not args.do_not_require_blog_url:
+    if blog_url_is_default and not args.do_not_require-blog_url:
         logging.error("The --blog_url argument is required for rewriting internal links correctly.")
         print("\n--- Why is this important? ---")
         print("Your original blog had links pointing to other posts on the same site.")
