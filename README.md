@@ -22,6 +22,9 @@ pip3 install -r requirements.txt
 >   - **Step 2** should use the `.typepad.com` URL (e.g., `https://blawg.typepad.com/blawg/`)
 >   - **Step 4** should use the final custom domain URL (e.g., `https://blawg.com`) so all links are rewritten correctly for your new site (we're making the links relative, so need to be able to filter by the url that Typepad was using)
 
+> **Note on Drafts/Unpublished Posts:**
+> This only gets published posts! You might want to check your blog (edit panel) for unpublished drafts!
+
 #### Step 1: Discover All Posts
 
 Find and catalog every post URL on your blog:
