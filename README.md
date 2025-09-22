@@ -23,7 +23,7 @@ pip3 install -r requirements.txt
 >   - **Step 4** should use the final custom domain URL (e.g., `https://blawg.com`) so all links are rewritten correctly for your new site (we're making the links relative, so need to be able to filter by the url that Typepad was using)
 
 > **Note on Drafts/Unpublished Posts:**
-> This only gets published posts! You might want to check your blog (edit panel) for unpublished drafts!
+> This only gets published posts\! You might want to check your blog (edit panel) for unpublished drafts\!
 
 #### Step 1: Discover All Posts
 
@@ -146,6 +146,10 @@ This script acts as a web crawler to discover the URL of every single post on yo
   - **Link Identification**: It specifically looks for `<a>` tags where the link text is exactly "Permalink", a common pattern in Typepad themes.
   - **Technology**: Uses `curl_cffi` to impersonate a real web browser, reducing the chance of being blocked. HTML is parsed with `BeautifulSoup`.
   - **Output**: A simple text file named `permalinks.txt` containing one post URL per line.
+  - **Command Line Options**:
+      - `blog_url`: (Required) The main URL of your blog, like `"https://yourblog.typepad.com/blog/"`.
+      - `--sleep-time <seconds>`: The amount of time to wait between fetching pages. Default is `0.5`.
+      - `--debug`: Shows extra detailed information while the script is running.
 
 #### 02\_posts.py - Content Archiving
 
@@ -155,6 +159,11 @@ This script reads the list of URLs from `permalinks.txt` and downloads the full 
   - **Asset Handling**: It parses the HTML to find all `<img>`, `<link>`, and `<script>` tags. It also recursively scans CSS files for `@import` and `url()` references to download fonts and background images.
   - **File Organization**: Each post is saved as an `.html` file. Media found within that post is saved to a correspondingly named sub-folder. Site-wide assets are saved to a shared `posts/assets` directory.
   - **Output**: The `posts/` directory, containing a complete, self-contained archive of your blog.
+  - **Command Line Options**:
+      - `blog_url`: (Required) The main URL of your blog.
+      - `--threads <number>`: How many downloads to run at the same time. Default is `4`.
+      - `--sleep-time <seconds>`: How long each worker should wait after downloading a post. Default is `0.5`.
+      - `--debug`: Shows extra detailed information, which can be helpful for troubleshooting.
 
 #### 03\_prepare\_media.py - Media Processing
 
@@ -165,6 +174,8 @@ This script processes the raw archive in the `posts/` directory to prepare all m
   - **File Renaming**: All unique media files are copied to a single folder and given a descriptive, web-safe name based on the post they came from (e.g., `my-first-post_header-image.jpg`).
   - **Technology**: Uses `Pillow` and `imagehash` for image processing and `python-magic` to reliably identify file types regardless of their extension.
   - **Output**: The `wordpress_export/typepad_media/` folder containing all unique media, and a `file_map.json` file that maps every original file path to its new, final filename.
+  - **Command Line Options**:
+      - This script takes no command line options. It automatically finds the `posts/` folder and creates the `wordpress_export/` folder.
 
 #### 04\_create\_wordpress\_file.py - WordPress Export Generation
 
@@ -177,3 +188,13 @@ The final script converts the cleaned HTML archive into a WordPress-compatible X
     3.  As a fallback, it looks for common Typepad content classes like `.entry-body`.
   - **Link Rewriting**: This is a critical step. The script reads the `file_map.json` created by the previous script. It parses the post's HTML and replaces every old, local link to an image or file with its new, final URL in the WordPress uploads directory. It also rewrites links between your blog posts to use the standard WordPress slug format.
   - **Output**: An `import.xml` file (or multiple parts for large blogs) in the `wordpress_export` directory, ready to be uploaded to WordPress.
+  - **Command Line Options**:
+      - `--blog_url <url>`: (Required) The original root URL of your blog. Needed to fix links between posts.
+      - `--blog_title <title>`: Sets the title for your blog in the export file.
+      - `--post-container-class <class_name>`: Tells the script the specific CSS class that wraps your main post content to fix issues with sidebars being included.
+      - `--max-posts-per-file <number>`: Splits the export into multiple smaller files, each with this many posts. Useful for very large blogs to prevent import timeouts.
+      - `--disable-intelligent-text-extract`: Turns off the smart content finder and only uses manual rules.
+      - `--disable-popup-scrubbing`: Stops the script from removing links that open images in a popup window.
+      - `--disable-div-rm`: Stops the script from removing `<div>` tags from your post content.
+      - `--disable-br-rm`: Stops the script from removing `<br>` tags and extra spaces.
+      - `--debug`: Shows extra detailed information, especially for date parsing.
