@@ -6,3 +6,4 @@ lxml
 python_magic
 tqdm
 trafilatura
+python-magic-bin
