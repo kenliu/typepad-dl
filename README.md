@@ -12,7 +12,10 @@ A comprehensive tool to archive your entire Typepad blog and seamlessly migrate 
 pip3 install -r requirements.txt
 ```
 
-> **Windows Users:** The `python-magic-bin` package, included in `requirements.txt`, has the necessary files for Windows.
+> **Windows Users:** The `python-magic-bin` package, included in `requirements.txt`, has the necessary files for Windows. If you do get errors related to libmagic.dll you should try to force reinstall:
+```bash
+pip3 install --force-reinstall --no-cache-dir -r requirements.txt
+```
 
 ### Step-by-Step Migration
 
