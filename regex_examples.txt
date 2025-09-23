@@ -1,0 +1,32 @@
+f: <p align="right"> <a href="[^"]*">Main</a> </p> <h2>[^,]*, [^\s]* \d+, \d+</h2> 
+r: 
+
+f: <p>The comments to this entry are closed\.</p>
+r: 
+
+f: in <a[^>]*>[^<]*</a> \|.+Permalink</a>\s*</p>?
+r: 
+
+f: <h2><a id="trackback"></a>TrackBack</h2> <p>TrackBack URL for this entry: [^<]*</p>
+r: 
+
+f: <h2><a id="comments"></a>Comments</h2> \]\]
+r: ]]
+
+f: <p>Listed below are links[^"]*"[^"]*">[^<]*</a>:</p>
+r:
+
+f: in <a href=".+permalink</a>\s*
+r:
+
+f: <h2>Post a comment</h2>.+</form>\]\]
+r: ]]
+
+f: <h2><a id="comments"></a>Comments</h2> \]\]
+r: ]]
+
+f: \|?\s*<a[^>]*>Permalink</a> 
+r:
+
+f: \[\s*<h3>[^<]*</h3>\s*
+r: [

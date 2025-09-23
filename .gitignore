@@ -6,3 +6,4 @@ wordpress_export/*
 *.zip
 
 !requirements.txt
+!regex_examples.txt

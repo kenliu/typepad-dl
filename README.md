@@ -28,6 +28,10 @@ pip3 install --force-reinstall --no-cache-dir -r requirements.txt
 > **Note on Drafts/Unpublished Posts:**
 > This only gets published posts\! You might want to check your blog (edit panel) for unpublished drafts\!
 
+> **Note on Comments:**
+> By default this does not get comments, it's possible to do but advanced. You might want to pull a Typepad export which will contain comments\!
+
+
 #### Step 1: Discover All Posts
 
 Find and catalog every post URL on your blog:
@@ -130,6 +134,34 @@ Use `python3` instead of `python` on macOS and Linux:
 ```bash
 python3 01_get.py "https://yourblog.typepad.com/blog/"
 ```
+
+Of course\! Here is a new section for your README file based on your notes. It's written to match the style and tone of the rest of the document.
+
+You can add this to your `README.md` file, maybe right after the "Common Issues & Solutions" section.
+
+-----
+
+## 💬 A Note on Importing Comments
+
+By default, this tool **does not** import blog comments. Comments are often mixed with the blog's theme in complex ways, making them difficult to extract automatically.
+
+It is possible to capture comments, but it is an **advanced method** that requires manual cleanup after the scripts are finished.
+
+### How to Capture Comments
+
+1.  Similar to the issue with extra sidebars, you need to find a CSS class that wraps **both** your main post content and the comments section. You can find this using your browser's "Inspect Element" tool.
+2.  Run Step 4 using the `--post-container-class` flag with the class name you found. This tells the script to save a bigger chunk of the page.
+    ```bash
+    python 04_create_wordpress_file.py --blog_url "..." --post-container-class "your-wider-class-name"
+    ```
+
+### The Manual Cleanup Step
+
+  * This process will save the comments inside your post content, but it will likely include a lot of extra, messy HTML from your Typepad theme.
+  * You will need to manually edit the final `import.xml` file using a text editor before you upload it to WordPress.
+  * Cleaning the file usually requires using **regular expressions (regex)** to find and replace the unwanted code.
+
+> **Warning:** This is a difficult step. The specific regex needed for cleanup will be unique to your blog's theme. This process is recommended only for users comfortable with regex and manually editing XML files. I have included a text file 'regex_examples.txt' as and example of the cleanup I did for a blog, but your blog will be different. On each of the find and replace lines you should remove both the letter, colon and space before the find and replace i.e. "f: in <a[^>]*>[^<]*</a>..." to "in <a[^>]*>[^<]*</a>".
 
 ## 🔧 Technical Details
 
