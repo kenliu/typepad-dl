@@ -25,7 +25,7 @@ MAP_FILE = os.path.join(SOURCE_EXPORT_DIR, "file_map.json")
 OUTPUT_WXR_FILE = os.path.join(SOURCE_EXPORT_DIR, "import.xml")
 # The relative path where media will be located in WordPress.
 # Using ../ makes it relative to the post's URL (e.g., /my-post/).
-WP_MEDIA_PATH = "../wp-content/uploads/typepad_media/"
+WP_MEDIA_PATH = "/wp-content/uploads/typepad_media/"
 # Default author name if one cannot be found in the HTML.
 DEFAULT_AUTHOR = "admin"
 
