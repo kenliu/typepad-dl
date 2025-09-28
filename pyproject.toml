@@ -1,0 +1,15 @@
+[project]
+name = "typepad-dl"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "beautifulsoup4>=4.14.0",
+    "curl-cffi>=0.13.0",
+    "imagehash>=4.3.2",
+    "lxml>=6.0.2",
+    "pillow>=11.3.0",
+    "python-magic>=0.4.27",
+    "tqdm>=4.67.1",
+    "trafilatura>=1.6.1",
+]
